@@ -2,7 +2,7 @@
 
 **Corpus.** github.com/AItutorialjrb/agentic_HZZ_case at commit `9234f29`, the code and reproducibility materials of arXiv:2611.03373. It is a Codex-driven analysis that is independent of GRACE and of HEP-Prov's authors. It contains 59 agent-written Markdown reports (`docs/`) and 207 results files (`results/`, JSON and CSV). The raw event ntuples live on Hugging Face and were not used. The repository was read as data; none of its code was run.
 
-**What was tested.** Archive mode, report against archive: is every number in the agent's reports supported by its archived results? There's no manifest, so read attestation doesn't apply. Script: `hzz_audit2.py` `examples/hzz_audit.py REPO OUT.json`.
+**What was tested.** Archive mode, report against archive: is every number in the agent's reports supported by its archived results? There's no manifest, so read attestation doesn't apply. Script: `examples/hzz_audit.py REPO OUT.json`.
 
 ## Result
 
