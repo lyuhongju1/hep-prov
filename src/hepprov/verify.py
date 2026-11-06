@@ -37,7 +37,7 @@ from typing import Any, Iterable
 
 from hepprov.plugins import hep
 
-NUM = re.compile(r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,8})?|\d+\.\d{1,8}|\d{2,})(?!\w|\.\d)")
+NUM = re.compile(r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,12})?|\d+\.\d{1,12}|\d{2,})(?!\w|\.\d)")
 PRIMITIVE = ("log", "data", "emit")
 SIG_GATE = 4
 MULT_CAP = 5
@@ -53,6 +53,7 @@ class Claim:
     decimals: int
     sig: int
     ctx: str
+    pos: int = -1
 
 
 @dataclass
@@ -68,17 +69,33 @@ def extract_claims(text: str) -> list[Claim]:
     out = []
     for i, m in enumerate(NUM.finditer(text)):
         s = m.group(0).replace(",", "")
+        # a leading minus sign belongs to the number when it isn't a hyphen inside a word or range
+        st = m.start()
+        if st >= 1 and text[st - 1] in "-−" and (st == 1 or not (text[st - 2].isalnum() or text[st - 2] in ".)")):
+            s = "-" + s
         v = float(s)
         if v in (0.0, 1.0, 2.0):
             continue
         # skip arXiv ids and years
-        before = text[max(0, m.start() - 8):m.start()].lower()
-        if "arxiv" in before or (1900 <= v <= 2100 and "." not in s):
+        before = text[max(0, m.start() - 12):m.start()].lower()
+        after = text[m.end():m.end() + 1]
+        arxiv_like = re.fullmatch(r"\d{4}\.\d{4,5}", s) is not None and (
+            "arxiv" in before or before.endswith("references/") or after in ("-", "/"))
+        date_stamp = "." not in s and re.fullmatch(r"-?(19|20)\d{6}", s) is not None   # YYYYMMDD, date-based seeds
+        if arxiv_like or date_stamp or (1900 <= v <= 2100 and "." not in s):
+            continue
+        # metadata, not measurements: inline code spans and seed/size/version contexts
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        # only the word immediately before or after the number counts
+        prev_w = re.findall(r"[\w+]+", text[max(line_start, m.start() - 30):m.start()])
+        next_w = re.findall(r"[\w+]+", text[m.end():m.end() + 30])
+        near = {w.lower() for w in prev_w[-1:] + next_w[:1]}
+        if text[line_start:m.start()].count("`") % 2 == 1 or near & METADATA_WORDS:
             continue
         dec = len(s.split(".")[1]) if "." in s else 0
-        sig = len(s.replace(".", "").lstrip("0"))
+        sig = len(s.lstrip("-").replace(".", "").lstrip("0"))
         ctx = text[max(0, m.start() - 50):m.end() + 30].replace("\n", " ")
-        out.append(Claim(f"R{i:04d}", s, v, dec, sig, ctx))
+        out.append(Claim(f"R{i:04d}", s, v, dec, sig, ctx, m.start()))
     return out
 
 
@@ -172,6 +189,29 @@ def emitted_values(manifest) -> dict[str, float]:
     return out
 
 
+def csv_leaves(path: Path, tag: str = "table", max_rows: int = 2000) -> dict[str, float]:
+    """Numeric cells of a small CSV table as intermediates (``table`` tier)."""
+    import csv
+    out: dict[str, float] = {}
+    try:
+        with open(path, newline="", encoding="utf-8", errors="ignore") as f:
+            rows = csv.reader(f)
+            header = next(rows, None) or []
+            for i, row in enumerate(rows):
+                if i >= max_rows:
+                    break
+                for j, cell in enumerate(row):
+                    try:
+                        v = float(cell)
+                    except ValueError:
+                        continue
+                    col = header[j] if j < len(header) else str(j)
+                    out[f"{tag}:{path.name}:{i}.{col}"] = v
+    except OSError:
+        pass
+    return out
+
+
 def pool_from_files(files: Iterable[Path]) -> Pool:
     files = sorted(set(files))
     pool = Pool()
@@ -182,6 +222,8 @@ def pool_from_files(files: Iterable[Path]) -> Pool:
     for f in files:
         if f.suffix == ".json" and not any(k in f.name for k in _SKIP_JSON):
             pool.add(*json_leaves(f, "json"))
+        elif f.suffix == ".csv" and not f.name.endswith("_events.csv"):
+            pool.add(csv_leaves(f))
     return pool
 
 
@@ -219,6 +261,11 @@ def _formulas(pool: Pool, exclude: str | None = None):
                     yield f"{ka} / {kb} * {e}", a / b * e
             yield f"{ka} * (1 + {kb}/100)", a * (1 + b / 100)
             yield f"{ka} * {kb}", a * b
+            yield f"{ka} - {kb}", a - b
+            if b:
+                yield f"{ka} / {kb} * 100", a / b * 100
+            if ka < kb:  # a + b is symmetric: once per pair
+                yield f"{ka} + {kb}", a + b
 
 
 class _Index:
@@ -350,9 +397,61 @@ def corroborate(verdicts: list[ClaimVerdict], pool: Pool, n: int = N_DECOYS) -> 
     return out
 
 
+NEIGHBORHOOD = 400   # characters: same table row / paragraph
+_ALIAS = re.compile(r"ev\[(R\d+)\]:\S+|claim:(R\d+)=\S+|text:(R\d+)=\S+")
+
+
+def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> None:
+    """Re-check unexplained claims against nearby numbers of the same report.
+
+    Prose and tables derive numbers from neighbours ("+0.660850 (2.609061 ->
+    3.269912)", a difference column next to its two inputs). For each
+    unexplained claim, the local pool is the claims within NEIGHBORHOOD
+    characters, with their full-precision evidence values. Entries equal to
+    the target at its precision are excluded, since a repeated number
+    explains nothing. Verdicts:
+
+    - ``derived``: reproduced from supported neighbours (or their full-precision
+      evidence, which matters because the report rounds the inputs);
+    - ``derived_from_text``: reproduced only with unsupported neighbours
+      (internally consistent, not evidenced).
+
+    Each carries the formula and a decoy null over that local pool.
+    """
+    for v in verdicts:
+        if v.verdict != "unexplained" or v.claim.sig < SIG_GATE or v.claim.pos < 0:
+            continue
+        sup, txt = Pool(), Pool()
+        for u in verdicts:
+            if u is v or abs(u.claim.pos - v.claim.pos) > NEIGHBORHOOD or _fmt_eq(u.claim.value, v.claim):
+                continue
+            if u.verdict in ("verified", "copy"):
+                for k in u.support[:2]:
+                    if pool is not None and k in pool.values and not _fmt_eq(pool.values[k], v.claim):
+                        sup.values[f"ev[{u.claim.id}]:{k}"] = pool.values[k]
+                sup.values[f"claim:{u.claim.id}={u.claim.text}"] = u.claim.value
+            txt.values[f"text:{u.claim.id}={u.claim.text}"] = u.claim.value
+        txt.values.update(sup.values)
+        for tier, lp in (("derived", sup), ("derived_from_text", txt)):
+            if len(lp.values) < 2:
+                continue
+            hits = _matches(v.claim, lp)
+            # count distinct formulas over CLAIMS, not over aliases of one claim
+            # (its printed value and its full-precision evidence values)
+            distinct = {_ALIAS.sub(lambda m: m.group(1) or m.group(2) or m.group(3), h) for h in hits}
+            if hits and len(distinct) <= MULT_CAP:
+                v.verdict, v.formula, v.support = tier, hits[0], hits
+                v.null_rate = _decoy_rate(v.claim, lp)
+                break
+
+
+METADATA_WORDS = {"seed", "seeds", "bytes", "byte", "kb", "mb", "gb", "gib", "mib", "version", "gcc", "g++", "commit", "sha256", "sha", "job", "hostname", "pid", "port"}
+
+
 def verify_report(report_text: str, pool: Pool, grammar: bool = True,
                   intermediates: bool = True) -> dict[str, Any]:
     rv = [classify(c, pool, grammar) for c in extract_claims(report_text)]
+    derive_in_text(rv, pool)
     res = _summ(rv)
     res["pool_size"] = len(pool.values)
     res["corroborated"] = corroborate(rv, pool)
