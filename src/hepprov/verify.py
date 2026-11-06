@@ -189,26 +189,62 @@ def emitted_values(manifest) -> dict[str, float]:
     return out
 
 
-def csv_leaves(path: Path, tag: str = "table", max_rows: int = 2000) -> dict[str, float]:
-    """Numeric cells of a small CSV table as intermediates (``table`` tier)."""
+TABLE_MAX_ROWS = 200
+
+
+def csv_leaves(path: Path, tag: str = "table", max_rows: int = TABLE_MAX_ROWS) -> dict[str, float]:
+    """A CSV as evidence.
+
+    Small CSVs (<= max_rows rows) are result tables: every numeric cell is an
+    intermediate (``table`` tier). Larger CSVs are per-event data: each
+    numeric column is summarized as primitive evidence (``data`` tier: n, sum,
+    mean, population and sample std, sigma/mean, min, max), like the
+    per-event logs. Treating 2,000 event rows as 2,000 claims-in-waiting
+    would make the formula search intractable and its chance rates
+    meaningless.
+    """
     import csv
-    out: dict[str, float] = {}
+    import statistics as st
     try:
         with open(path, newline="", encoding="utf-8", errors="ignore") as f:
-            rows = csv.reader(f)
-            header = next(rows, None) or []
-            for i, row in enumerate(rows):
-                if i >= max_rows:
-                    break
-                for j, cell in enumerate(row):
-                    try:
-                        v = float(cell)
-                    except ValueError:
-                        continue
-                    col = header[j] if j < len(header) else str(j)
-                    out[f"{tag}:{path.name}:{i}.{col}"] = v
+            rows = list(csv.reader(f))
     except OSError:
-        pass
+        return {}
+    if not rows:
+        return {}
+    header, body = rows[0], rows[1:]
+    out: dict[str, float] = {}
+    if len(body) <= max_rows:
+        for i, row in enumerate(body):
+            for j, cell in enumerate(row):
+                try:
+                    v = float(cell)
+                except ValueError:
+                    continue
+                col = header[j] if j < len(header) else str(j)
+                out[f"{tag}:{path.name}:{i}.{col}"] = v
+        return out
+    for j, col in enumerate(header):
+        vals = []
+        for row in body:
+            if j < len(row):
+                try:
+                    x = float(row[j])
+                except ValueError:
+                    continue
+                if math.isfinite(x):
+                    vals.append(x)
+        if len(vals) < 2 or col.lower() in ("event", "eventid", "event_id", "id", "index"):
+            continue
+        n, mu = len(vals), st.fmean(vals)
+        pre = f"data:{path.as_posix()}:{col}"
+        out.update({f"{pre}:n": float(n), f"{pre}:sum": float(sum(vals)), f"{pre}:mean": mu,
+                    f"{pre}:std": st.pstdev(vals), f"{pre}:std_sample": st.stdev(vals),
+                    f"{pre}:min": min(vals), f"{pre}:max": max(vals)})
+        if mu:
+            out[f"{pre}:rel_std"] = st.pstdev(vals) / mu
+            out[f"{pre}:rel_std_sample"] = st.stdev(vals) / mu
+        out[f"{pre}:n_rows_total"] = float(len(body))
     return out
 
 
@@ -224,6 +260,8 @@ def pool_from_files(files: Iterable[Path]) -> Pool:
             pool.add(*json_leaves(f, "json"))
         elif f.suffix == ".csv" and not f.name.endswith("_events.csv"):
             pool.add(csv_leaves(f))
+        elif f.suffix == ".csv":
+            pass  # *_events.csv: handled by the HEP plugin (event_table_quantities)
     return pool
 
 
@@ -240,9 +278,20 @@ def _family_variants(fams: dict[str, list[float]]) -> dict[str, list[float]]:
     return out
 
 
+PAIR_GRAMMAR_MAX = 1500   # pair formulas are O(n^2); above this only identity and family formulas run
+
+
 def _formulas(pool: Pool, exclude: str | None = None):
     """Yield (description, value) over the bounded grammar."""
     vals = {k: v for k, v in pool.values.items() if k != exclude}
+    if len(vals) > PAIR_GRAMMAR_MAX:
+        object.__setattr__(pool, "grammar_truncated", True)
+        for k, fam in _family_variants(pool.families).items():
+            n = len(fam)
+            mu = sum(fam) / n
+            yield f"mean({k})", mu
+            yield f"std({k})", math.sqrt(sum((x - mu) ** 2 for x in fam) / n)
+        return
     for k, fam in _family_variants(pool.families).items():
         n = len(fam)
         mu = sum(fam) / n
@@ -454,6 +503,7 @@ def verify_report(report_text: str, pool: Pool, grammar: bool = True,
     derive_in_text(rv, pool)
     res = _summ(rv)
     res["pool_size"] = len(pool.values)
+    res["grammar_truncated"] = bool(getattr(pool, "grammar_truncated", False))
     res["corroborated"] = corroborate(rv, pool)
     res["invariants"] = getattr(pool, "invariants", [])
     if intermediates:

@@ -112,6 +112,37 @@ class Recorder:
             "external": not inside, "sha256": sha256_file(p), "note": note,
         })
 
+    def write_file(self, rel: str, content: str, label: str = "") -> dict[str, Any]:
+        """Write a file on behalf of the agent and record it as a step (e.g. a script the agent authored).
+
+        Files the agent writes through its harness are attributed like command
+        outputs; a file changed any other way shows up as an untracked change.
+        """
+        p = (self.root / rel).resolve()
+        if not str(p).startswith(str(self.root)):
+            raise ValueError(f"refusing to write outside the run root: {rel}")
+        if STATE_DIR in p.relative_to(self.root).parts:
+            raise ValueError("refusing to write into the provenance state directory")
+        before = self._load_scan()
+        now = scan(self.root)
+        changed, deleted = self._diff(before, now)
+        if changed or deleted:
+            self.manifest.append("untracked_change", {
+                "changed": _hash_rel(self.root, changed), "deleted": deleted,
+                "note": "files changed outside the recorder since the last recorded step"})
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        after = scan(self.root)
+        w_changed, w_deleted = self._diff(now, after)
+        ev = self.manifest.append("exec", {
+            "label": label or f"write {rel}", "cmd": ["<write_file>", rel], "cwd": str(self.root),
+            "exit_code": 0, "duration_s": 0.0, "stdout_sha256": "", "stderr_sha256": "",
+            "writes": _hash_rel(self.root, w_changed), "deletes": w_deleted, "reads": [],
+            "python_processes": [], "emits": [], "capture": {"L1": True, "L2": False, "L3": False},
+        })
+        self._save_scan(after)
+        return ev
+
     def exec(self, cmd: list[str], label: str = "", cwd: str | os.PathLike | None = None,
              env_extra: dict[str, str] | None = None, echo: bool = True) -> dict[str, Any]:
         before_recorded = self._load_scan()
