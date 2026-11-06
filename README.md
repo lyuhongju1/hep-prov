@@ -3,7 +3,7 @@
 Provenance recorder and verifier for AI agents doing physics. **Status:**
 - Milestone 0 (recorder and read attestation): done.
 - Milestone 1 (verifier): core done. On the archived GRACE corpus it rediscovers the artifact audit's DarkSide findings without supervision.
-- Fault-injection calibration (M2): not done.
+- Milestone 2 (fault-injection calibration on a reference pipeline): done. 27/27 injected defects detected, 0/20 clean runs flagged. In-sample; see [docs/CALIBRATION.md](docs/CALIBRATION.md).
 
 Design: [DESIGN.md](DESIGN.md).
 

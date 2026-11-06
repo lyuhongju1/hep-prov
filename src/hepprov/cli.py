@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("exec"); p.add_argument("--label", default=""); p.add_argument("command", nargs=argparse.REMAINDER)
     p = sub.add_parser("check"); p.add_argument("--json", action="store_true")
     sub.add_parser("log")
+    p = sub.add_parser("audit", help="run every detector on a recorded run; exit 1 if anything is flagged")
+    p.add_argument("report", nargs="?")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("verify", help="check every number in a report against the run's evidence")
     p.add_argument("report")
     p.add_argument("--archive", action="store_true",
@@ -75,6 +78,17 @@ def main(argv: list[str] | None = None) -> int:
             for rel, steps in res["overwrites"].items():
                 print(f"  [overwrite] {rel}: {' -> '.join(steps)}")
         return 0 if (res["ok"] and not chain) else 1
+    if a.cmd == "audit":
+        from hepprov.audit import audit_run
+        res = audit_run(root, a.report)
+        if a.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"{res['n_flags']} flag(s)" + (f"; report claims {res['verify_counts']}" if res["verify_counts"] else ""))
+            for f in res["flags"]:
+                where = f.get("path") or f.get("step") or f.get("sweep") or f.get("claim") or ""
+                print(f"  [{f['detector']}:{f['kind']}] {where}  {f['detail'][:150]}")
+        return 1 if res["flags"] else 0
     if a.cmd == "verify":
         from hepprov.verify import attested_files, emitted_values, pool_from_files, verify_report
         if a.archive:
