@@ -9,3 +9,7 @@ wrote.
 """
 
 __version__ = "0.0.1"
+
+from hepprov.emit import emit  # noqa: E402
+
+__all__ = ["emit", "__version__"]

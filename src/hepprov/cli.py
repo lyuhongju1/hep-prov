@@ -32,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("exec"); p.add_argument("--label", default=""); p.add_argument("command", nargs=argparse.REMAINDER)
     p = sub.add_parser("check"); p.add_argument("--json", action="store_true")
     sub.add_parser("log")
+    p = sub.add_parser("verify", help="check every number in a report against the run's evidence")
+    p.add_argument("report")
+    p.add_argument("--archive", action="store_true",
+                   help="no manifest: use every file under --root as evidence (retrospective audit)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--no-grammar", action="store_true")
     a = ap.parse_args(argv)
     root = _root(a)
 
@@ -69,6 +75,45 @@ def main(argv: list[str] | None = None) -> int:
             for rel, steps in res["overwrites"].items():
                 print(f"  [overwrite] {rel}: {' -> '.join(steps)}")
         return 0 if (res["ok"] and not chain) else 1
+    if a.cmd == "verify":
+        from hepprov.verify import attested_files, emitted_values, pool_from_files, verify_report
+        if a.archive:
+            files = [p for p in root.rglob("*") if p.is_file() and ".hepprov" not in p.parts]
+            pool = pool_from_files(files)
+        else:
+            m = Manifest(root)
+            pool = pool_from_files(attested_files(m))
+            pool.add(emitted_values(m))
+        res = verify_report(Path(a.report).read_text(encoding="utf-8", errors="ignore"),
+                            pool, grammar=not a.no_grammar)
+        res["mode"] = "archive" if a.archive else "attested"
+        if a.json:
+            print(json.dumps(res, indent=2))
+        else:
+            c = res["counts"]
+            print(f"{res['n_claims']} numeric claims ({res['mode']}, pool {res['pool_size']}): "
+                  + ", ".join(f"{k} {c.get(k, 0)}" for k in ("verified", "copy", "diagnosed", "unexplained")))
+            for v in res["verdicts"]:
+                if v["verdict"] == "diagnosed":
+                    print(f"  [diagnosed null={v['null_rate']:.0%}] {v['text']}  = {v['formula']}")
+                    print(f"      ...{v['ctx']}...")
+            for c in res.get("corroborated", []):
+                print(f"  [corroborated joint-null={c['joint_null']:.0%}] {c['mean_value']} ± {c['std_value']} "
+                      f"= mean/std({c['family_variant']})")
+            for i in res.get("invariants", []):
+                print(f"  [{i['code']}] {i['sweep']}: {i['detail']}")
+            im = res.get("intermediates")
+            if im:
+                c = im["counts"]
+                print(f"{im['n_claims']} intermediate values (results JSONs): "
+                      + ", ".join(f"{k} {c.get(k, 0)}" for k in ("verified", "copy", "diagnosed", "unexplained")))
+                for v in sorted(im["verdicts"], key=lambda x: x["null_rate"] if x["null_rate"] is not None else 1):
+                    if v["verdict"] == "diagnosed" and v["null_rate"] is not None and v["null_rate"] <= 0.05:
+                        print(f"  [diagnosed null={v['null_rate']:.0%}] {v['text']} ({v['id']})  = {v['formula']}")
+                for c in im.get("corroborated", []):
+                    print(f"  [corroborated joint-null={c['joint_null']:.0%}] {c['mean_value']} ± {c['std_value']} "
+                          f"= mean/std({c['family_variant']})")
+        return 0
     if a.cmd == "log":
         for ev in Manifest(root).events():
             d = ev["data"]

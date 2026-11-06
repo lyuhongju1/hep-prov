@@ -1,13 +1,38 @@
 # HEP-Prov
 
-Provenance recorder and verifier for AI agents doing physics. **Status: milestone 0 (recorder and read attestation). The verifier is not built yet.** Design: [DESIGN.md](DESIGN.md).
+Provenance recorder and verifier for AI agents doing physics. **Status:**
+- Milestone 0 (recorder and read attestation): done.
+- Milestone 1 (verifier): core done. On the archived GRACE corpus it rediscovers the artifact audit's DarkSide findings without supervision.
+- Fault-injection calibration (M2): not done.
+
+Design: [DESIGN.md](DESIGN.md).
 
 ```bash
 hepprov init --declare detector.gdml        # start a run; pre-existing files are recorded, not trusted
 hepprov exec --label simulate -- python sim.py
 hepprov exec --label analyze  -- python ana.py
 hepprov check                               # hash chain + is every read a file this run produced?
+hepprov verify report.md                    # every number in the report vs. this run's evidence
+hepprov --root OLD_RUN verify OLD_RUN/report.md --archive   # retrospective, no manifest
 ```
+
+In a script, `hepprov.emit("light_yield_1MeV", value)` declares a computed number (cooperative mode). Outside a recorded run it does nothing.
+
+Every number in a report gets one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| verified | Equals a quantity from primitive evidence (per-event logs, event tables) or an emitted value, to every printed digit |
+| copy | Found only in an intermediate results file |
+| diagnosed | Reproduced only by a formula in a bounded grammar. The formula and its decoy-measured chance rate are attached. This is a screening verdict |
+| unexplained | Nothing matches |
+
+The verifier also:
+- checks the numbers inside results files the same way (each excluding itself);
+- promotes mean/std pairs from the same value family as *corroborated*, with a joint chance rate;
+- runs the HEP invariants: batch-ratio suppression, and linearity for EM particles.
+
+In attested mode, only files this run wrote or declared count as evidence.
 
 `hepprov exec` records:
 - the command, its exit code, and hashes of its stdout and stderr;

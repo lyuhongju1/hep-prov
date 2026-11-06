@@ -143,7 +143,7 @@ class Recorder:
 
         after = scan(self.root)
         w_changed, w_deleted = self._diff(now, after)
-        reads, procs = [], []
+        reads, procs, emits = [], [], []
         for lf in sorted(log_dir.glob("reads.*.jsonl")):
             for line in lf.read_text(encoding="utf-8", errors="replace").splitlines():
                 try:
@@ -156,6 +156,8 @@ class Recorder:
                     reads.append({k: rec.get(k) for k in ("path", "sha256", "size", "via", "error") if k in rec})
                 elif rec.get("type") == "process":
                     procs.append({k: rec.get(k) for k in ("pid", "argv", "executable", "version")})
+                elif rec.get("type") == "emit":
+                    emits.append({k: rec.get(k) for k in ("name", "value", "repr", "unit")})
         ev = self.manifest.append("exec", {
             "label": label,
             "cmd": list(cmd),
@@ -168,6 +170,7 @@ class Recorder:
             "deletes": w_deleted,
             "reads": reads,
             "python_processes": procs,
+            "emits": emits,
             "capture": {"L1": True, "L2": bool(procs), "L3": False},
         })
         self._save_scan(after)
