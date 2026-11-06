@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hepprov"
+version = "0.0.1"
+description = "Provenance recorder and verifier for AI agents doing physics"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Hong Joo Ryoo" }]
+dependencies = []
+
+[project.optional-dependencies]
+hep = ["numpy", "pandas", "pyarrow", "uproot"]
+dev = ["pytest", "numpy", "pandas", "pyarrow"]
+
+[project.scripts]
+hepprov = "hepprov.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hepprov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

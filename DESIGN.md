@@ -24,18 +24,18 @@ All of these sit in plumbing that any agent has, in any physics domain. The fix 
 | ReAgent (2609.22111) | static audit plus re-execution of experiments | no | per claim, not per number | no (manual ground truth) | ML papers |
 | Proof-Carrying Numbers (2509.06902) | display-layer tags on numbers | no | to a claim store, not a computation; atomic values only | proofs, no empirical evaluation | statistics |
 | HZZ agent case study (2611.03373) | manual practice: checksums, seeds, frozen inputs | partly (manual) | no (tables regenerate figures) | no | HEP |
-| claimtrail (PyPI) | claim IDs linked to computation records | ? | yes (cooperative) | ? | general. **Not yet assessed: page didn't load. Must check before any novelty claim.** |
+| claimtrail 0.5.1 (PyPI, github.com/patrickt6/claimtrail, MIT, 2026-09) | cooperative `@tracked` runs and `claim(...)` assertions; non-cooperative "watch" via Claude Code hooks | hashes inputs; flags inputs **changed since the run**; does not check that a read file was produced by the workflow | report markers with MATCH/DRIFT/UNBACKED, tolerance or pattern matching ("treat a DRIFT as 'go look'") | unit, property and mutation tests; no FP/FN rates on real pipelines | general (single author, pre-adoption) |
 
 The survey (2606.04990) names the open gaps: no benchmark covers the complete provenance chain, and tamper-evident or attested traces are rarely reported.
 
-**HEP-Prov's claim to novelty (to be defended):**
-1. Content-addressed **input attestation**, so stale and leftover inputs are caught when they're read.
-2. **Mechanical** number-to-computation binding: exact digits, null-calibrated, no LLM judgement.
-3. It works **without agent cooperation**.
-4. It ships a **measured detection profile**.
-5. Physics invariants come as plugins.
+**HEP-Prov's claim to novelty (to be defended).** claimtrail already does cooperative claim binding and change-since-run detection, so neither of those is new. The new parts are:
+1. **Read-time attestation against a write manifest.** A read is checked against what this run itself wrote. That catches a file no step produced, a leftover in a reused directory, or an older version. Detecting that an input changed later is a different, weaker check.
+2. Capture that **doesn't depend on the agent or the language**: filesystem diffs for any binary (Geant4, Opticks), and import-level hooks for any Python process.
+3. **Non-cooperative, exact-digit, null-calibrated derivation** of reported numbers: identity, copy, and a bounded formula grammar with decoy-measured chance rates. This replaces tolerance or pattern matching.
+4. A **measured detection profile** from fault injection on physics pipelines, with false-positive rates on clean runs.
+5. **Physics plugins:** log-tier quantities and invariants.
 
-Each of these exists somewhere on its own. Their combination, evaluated on real physics agents, does not.
+Each piece exists somewhere on its own. Their combination, evaluated on real physics agents, does not.
 
 ## 3. Architecture
 
