@@ -45,7 +45,8 @@ def _is_approximate(text: str, pos: int) -> bool:
     return any(m in before for m in _APPROX)
 
 
-CODE_SUFFIXES = (".py", ".sh", ".ipynb", ".r", ".jl", ".c", ".cc", ".cpp", ".mac")
+CODE_SUFFIXES = (".py", ".sh", ".ipynb", ".r", ".jl", ".c", ".cc", ".cpp", ".mac",
+                 ".md", ".rst", ".tex")   # code, and documents the agent writes itself (its report)
 
 
 def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
