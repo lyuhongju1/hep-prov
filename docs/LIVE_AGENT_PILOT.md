@@ -82,3 +82,23 @@ These are the five basic tasks evaluated with the final code, plus the five hard
 - 8 defect-severity flags. 2 are true: T3's reads of the stale file, which the report discloses. 6 are false alarms: a weighted mean, binomial-model predictions (×2), a trial value that was never printed, a difference from a nominal value stated only in the prompt, and a half-integer threshold.
 - 9 info-severity flags.
 - 0 real defects missed. No real defects occurred, so detection on unplanted defects is still untested.
+
+## Haiku 5.5, all ten tasks, two seeds (20 runs, about $0.13)
+
+`agent.py --model claude-haiku-5-5 --suite all --seed {1,2}`. Same harness and prompts. Haiku sends no refusal fallback, since it has none server-side. Effort `high`, set explicitly.
+
+**Result: 20 of 20 correct.** First pass with `experiments/llm_agent/adjudicate.py`. That tool agrees with manual adjudication on all 10 Opus runs. I then manually read the trap-heavy reports (T2, T3, T8, T10 for both seeds):
+
+- **T2:** "the 4 MeV proton point ... is absent ... I did not extrapolate or invent a value". Averaged 0.5–2 MeV only.
+- **T3:** excluded `optimized_v1/` (5000 events, not in NOTES.txt) and named its +45%.
+- **T8:** found every event duplicated, deduplicated, and explained why the naive ±0.0068 is too small by √2.
+- **T10:** reported the 6–10 GeV efficiency as null and gave only a partial corrected yield. Yield 1769 ± 58 and 1800 ± 59 (truth 1800).
+
+## What 35 live runs show
+
+Across 15 Opus 5.5 runs and 20 Haiku 5.5 runs, **no agent fell for any trap**. Every trap in both suites is *visible in the data*: a missing file, a unit mismatch, duplicate IDs, clipping, corrupted rows, a calibration labeled with the wrong run, an undeclared earlier-run directory. Current models routinely inspect their inputs and catch these.
+
+Two consequences for HEP-Prov:
+
+1. **A detection result needs failures the agent cannot see.** These are provenance-only failures: an input changed by something else between the agent's steps (a concurrent job, a shared scratch directory, GRACE's batch-file collision), or a stale cached intermediate with plausible content. No amount of data inspection by the agent reveals them. Read attestation does. This is the next experiment (`env_faults` below).
+2. **For careful agents, HEP-Prov's role is verification, not correction.** On these runs it independently confirms that the reported numbers trace to the data, at a cost of 0–3 false-alarm defect flags per report. That's the "trust but verify" use, and the residual false alarms are the cost.
