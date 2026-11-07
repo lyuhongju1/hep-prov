@@ -28,6 +28,7 @@ import anthropic
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))  # hepprov without installing
 from tasks import TASKS, build, save_truth  # noqa: E402
+from tasks_hard import TASKS_HARD  # noqa: E402
 
 from hepprov.recorder import Recorder  # noqa: E402
 
@@ -37,7 +38,7 @@ THINKING = {"type": "adaptive", "display": "summarized"}
 BETAS = ["server-side-fallback-2026-07-01"]
 FALLBACKS = "default"
 MAX_TOKENS = 16000
-MAX_TURNS = 30
+MAX_TURNS = 40
 MAX_COST_USD = 3.00
 PRICE = {"in": 4.00, "out": 20.00, "cache_read": 0.20, "cache_write": 5.00}  # $/MTok, claude-opus-5-5
 TOOL_OUTPUT_LIMIT = 8000
@@ -171,11 +172,13 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--tasks", nargs="*", help="task id prefixes, e.g. T1 T3 (default: all)")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--suite", choices=["basic", "hard"], default="basic")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     client = anthropic.Anthropic()
-    sel = [t for t in TASKS if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
+    pool = TASKS_HARD if a.suite == "hard" else TASKS
+    sel = [t for t in pool if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
     total = 0.0
     for t in sel:
         m = run_task(t, out, a.seed, client)
