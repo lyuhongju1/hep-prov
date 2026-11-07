@@ -47,7 +47,7 @@ These are the residual false-alarm classes on reports from careful agents.
 
 - Five runs, one model, one seed.
 - No natural defects occurred, so this measures false alarms, not detection.
-- The calibration (`docs/CALIBRATION.md`) must be rerun after these verifier changes.
+- Calibration was rerun after the basic-suite fixes and again after the hard-suite fixes; both times unchanged (27/27 detected, 0/20 clean runs flagged).
 
 ## Hard suite (same day, claude-opus-5-5, about $0.96)
 
