@@ -642,10 +642,94 @@ def extract_constants(text: str) -> list[tuple[int, float]]:
     return out
 
 
+_PM = re.compile(r"\s*(?:±|\+/-|\+-)\s*")
+PROSE_MAX_NULL = 0.05
+PROSE_NEIGHBORHOOD = 1500   # 'x ± s' pairs are few: a wider window (a table, then a summary sentence)
+
+
+def _full(v: ClaimVerdict, pool: Pool | None) -> float:
+    """Full-precision value behind a supported claim (reports round; derivations use the unrounded value)."""
+    if pool is not None and v.verdict in ("verified", "copy") and v.support:
+        k = _CONV.sub("", v.support[0])
+        if k in pool.values and v.support[0] == k:
+            return pool.values[k]
+    return v.claim.value
+
+
+def _pm_pairs(verdicts: list[ClaimVerdict], text: str, pool: Pool | None = None) -> list[tuple[int, float, float, str]]:
+    """'x ± s' pairs stated in the report: (position, x, s, label), x and s at full precision when supported."""
+    by_pos = {v.claim.pos: v for v in verdicts if v.claim.pos >= 0}
+    out = []
+    for cv in by_pos.values():
+        c = cv.claim
+        end = c.pos + len(c.text.lstrip("-")) + (1 if c.text.startswith("-") else 0)
+        m = _PM.match(text, end)
+        if not m:
+            continue
+        sv = by_pos.get(m.end())
+        if sv is not None and sv.claim.value > 0:
+            out.append((c.pos, _full(cv, pool), _full(sv, pool), f"{c.text}±{sv.claim.text}"))
+    return out
+
+
+def _prose_candidates(pairs, values):
+    """Arithmetic commonly done in prose: weighted means, combined errors, pulls, roots, powers."""
+    for i, (_, a, sa, la) in enumerate(pairs):
+        for _, b, sb, lb in pairs[i + 1:]:
+            wa, wb = 1 / sa ** 2, 1 / sb ** 2
+            yield f"wmean({la},{lb})", (a * wa + b * wb) / (wa + wb)
+            yield f"wmean_err({la},{lb})", 1 / math.sqrt(wa + wb)
+            d, sd = a - b, math.sqrt(sa ** 2 + sb ** 2)
+            yield f"diff_err({la},{lb})", sd
+            for sign, dd in ((1, d), (-1, -d)):
+                yield f"pull{'+' if sign > 0 else '-'}({la},{lb})", dd / sd
+    for lab, x in values:
+        if x > 0:
+            for n in (2, 3, 4):
+                yield f"root{n}({lab})", x ** (1 / n)
+        for n in (2, 3, 4):
+            yield f"pow{n}({lab})", x ** n
+
+
+def derive_prose(verdicts: list[ClaimVerdict], text: str, pool: Pool | None = None) -> None:
+    """Explain remaining unexplained claims by uncertainty-aware prose arithmetic over nearby stated numbers.
+
+    Report-local only, exact digits, and accepted only if the measured chance
+    rate (decoys of equal precision against the same candidate set) is at most
+    PROSE_MAX_NULL. Verdict ``derived_from_text``: internally consistent with
+    stated numbers, not evidence by itself.
+    """
+    pairs = _pm_pairs(verdicts, text, pool)
+    for v in verdicts:
+        if v.verdict != "unexplained" or v.claim.pos < 0 or v.claim.sig < 3:
+            continue
+        near_pairs = [p for p in pairs if abs(p[0] - v.claim.pos) <= PROSE_NEIGHBORHOOD
+                      and not _fmt_eq(p[1], v.claim)]
+        near_vals = [(u.claim.text, u.claim.value) for u in verdicts
+                     if u is not v and abs(u.claim.pos - v.claim.pos) <= NEIGHBORHOOD
+                     and not _fmt_eq(u.claim.value, v.claim)]
+        cands = [(d, x) for d, x in _prose_candidates(near_pairs, near_vals) if math.isfinite(x)]
+        hits = [d for d, x in cands if _fmt_eq(x, v.claim)]
+        if not hits or len(set(hits)) > MULT_CAP:
+            continue
+        printed = set()
+        for _, x in cands:
+            try:
+                printed.add(f"{x:.{v.claim.decimals}f}")
+            except (ValueError, OverflowError):
+                pass
+        rng = random.Random(f"prose|{v.claim.text}")
+        null = sum(f"{v.claim.value * rng.uniform(0.5, 1.5):.{v.claim.decimals}f}" in printed
+                   for _ in range(N_DECOYS)) / N_DECOYS
+        if null <= PROSE_MAX_NULL:
+            v.verdict, v.formula, v.support, v.null_rate = "derived_from_text", hits[0], hits, null
+
+
 def verify_report(report_text: str, pool: Pool, grammar: bool = True,
                   intermediates: bool = True) -> dict[str, Any]:
     rv = [classify(c, pool, grammar) for c in extract_claims(report_text)]
     derive_in_text(rv, pool)   # small constants are NOT operands: tried, they made fabrications ambiguous
+    derive_prose(rv, report_text, pool)
     res = _summ(rv)
     res["pool_size"] = len(pool.values)
     res["grammar_truncated"] = bool(getattr(pool, "grammar_truncated", False))

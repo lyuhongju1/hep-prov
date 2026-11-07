@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))  # hepprov without installing
 from tasks import TASKS, build, save_truth  # noqa: E402
 from tasks_hard import TASKS_HARD  # noqa: E402
+from tasks_long import TASKS_LONG  # noqa: E402
 
 from hepprov.recorder import Recorder  # noqa: E402
 
@@ -239,7 +240,7 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--tasks", nargs="*", help="task id prefixes, e.g. T1 T3 (default: all)")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--suite", choices=["basic", "hard", "all"], default="basic")
+    ap.add_argument("--suite", choices=["basic", "hard", "all", "long"], default="basic")
     ap.add_argument("--model", choices=sorted(MODELS), default="claude-opus-5-5")
     ap.add_argument("--env-fault", choices=["scaled", "consistent"], default=None,
                     help="inject an environment fault (see FAULTS)")
@@ -251,7 +252,10 @@ def main() -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     client = anthropic.Anthropic()
-    pool = {"basic": TASKS, "hard": TASKS_HARD, "all": TASKS + TASKS_HARD}[a.suite]
+    pool = {"basic": TASKS, "hard": TASKS_HARD, "all": TASKS + TASKS_HARD, "long": TASKS_LONG}[a.suite]
+    global MAX_TURNS, MAX_COST_USD
+    if a.suite == "long":   # long open-ended tasks get more room
+        MAX_TURNS, MAX_COST_USD = 60, 5.00
     sel = [t for t in pool if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
     total = 0.0
     for t in sel:
