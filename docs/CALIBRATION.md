@@ -37,4 +37,4 @@ D1 and D9 are each caught by two independent detectors: attestation at the bad r
   - transcription into non-Python code;
   - numbers fused to letters ("3.14x", "50mm"), which aren't extracted;
   - tampering by an adversary who also rewrites the manifest (there's a chain, but no signature yet).
-- **Calibration rerun pending:** the table above predates the 2026-11-06 extraction fixes (signs, 9+ decimals, metadata, in-text derivation); one rerun is needed to confirm it.
+- **Rerun on 2026-11-06 at commit `0111e6a`:** after the extraction fixes from the HZZ corpus and the false-alarm fixes from the live-agent pilot (see `docs/LIVE_AGENT_PILOT.md`), the table is unchanged: 27/27 detected, 0/20 clean runs flagged, 0 control flags.
