@@ -53,6 +53,9 @@ CLASSES: dict[str, tuple[set[str], list[Defects]]] = {
         [Defects(batch=b, batch_factor=f) for b, f in ((("baseline", "electron", 0.005), 0.47),
                                                        (("optimized", "electron", 0.005), 0.55),
                                                        (("baseline", "proton", 0.005), 0.22))]),
+    "D10 output of a superseded script version": (
+        {"superseded_output"},
+        [Defects(superseded=f) for f in (1.02, 0.97, 1.05)]),
     "D9 edit outside the recorder": (
         {"written_outside_recorder"},
         [Defects(hand_edit=k) for k in (("points", "baseline/electron/1MeV", "yield_per_mev"),
@@ -73,7 +76,7 @@ def run(out: Path, clean_seeds: int = 20, seed: int = 1) -> dict:
     control_sigs = {_sig(f) for f in control["flags"]}
 
     profile = {}
-    detectors = sorted({"attest", "outputs", "invariants", "verify", "static", "chain"})
+    detectors = sorted({"attest", "outputs", "invariants", "verify", "static", "chain", "provenance"})
     for cname, (expected, instances) in CLASSES.items():
         rows = []
         for i, df in enumerate(instances):
@@ -111,7 +114,7 @@ def run(out: Path, clean_seeds: int = 20, seed: int = 1) -> dict:
 
 
 def table(result: dict) -> str:
-    dets = ["attest", "outputs", "static", "verify", "invariants"]
+    dets = ["attest", "outputs", "static", "verify", "invariants", "provenance"]
     lines = [f"{'defect class':44} {'expected':>8} " + " ".join(f"{d[:8]:>8}" for d in dets)]
     for c, p in result["profile"].items():
         lines.append(f"{c[:44]:44} {p['detected_expected']:>6}/3 "

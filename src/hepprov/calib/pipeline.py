@@ -133,6 +133,7 @@ class Defects:
     batch: tuple | None = None             # (geom, part, E) run in batches with this suppression
     batch_factor: float = 0.47
     hand_edit: tuple | None = None         # results.json edited outside the recorder: key path
+    superseded: float | None = None        # simulate.py changed (light yield x this) and re-run for electrons only
     params: dict = field(default_factory=dict)
 
 
@@ -197,6 +198,13 @@ def run_pipeline(root: Path, df: Defects | None = None, seed: int = 1, n_events:
     py = sys.executable
     rec.exec([py, "simulate.py", "electron"], label="simulate_electron", echo=False)
     rec.exec([py, "simulate.py", "proton"], label="simulate_proton", echo=False)
+    if df.superseded:
+        # the agent "fixes" the simulation and re-runs only one particle: proton outputs are now from old code
+        new_sim = scripts["simulate.py"].replace('LY = {"baseline": 1480.0,',
+                                                 f'LY = {{"baseline": 1480.0 * {df.superseded},')
+        assert new_sim != scripts["simulate.py"]
+        rec.write_file("simulate.py", new_sim, label="rewrite simulate.py")
+        rec.exec([py, "simulate.py", "electron"], label="simulate_electron_fixed", echo=False)
     rec.exec([py, "analyze.py"], label="analyze", echo=False)
     if df.hand_edit:
         r = json.loads((root / "results.json").read_text())

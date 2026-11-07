@@ -45,6 +45,7 @@ def attest(manifest: Manifest) -> dict[str, Any]:
     verdicts: list[ReadVerdict] = []
     overwrites: dict[str, list[str]] = {}
     authored: set[str] = set()
+    step_script: dict[str, str] = {}
 
     for ev in manifest.events():
         kind, d, seq = ev["kind"], ev["data"], ev["seq"]
@@ -88,11 +89,20 @@ def attest(manifest: Manifest) -> dict[str, Any]:
             authoring = (d.get("cmd") or [""])[0] == "<write_file>"
             if authoring:
                 authored.add(label)
+            invocation = tuple(d.get("cmd", [])[1:])     # script and its arguments
+            script = next((x for x in invocation if x.endswith(".py")), None)
+            if script:
+                step_script[label] = invocation
             for rel, sha in own.items():
                 hist = versions.setdefault(rel, [])
                 prev = hist[-1][1] if hist else None
-                # an agent revising a file it authors (script, report) is not an overwrite
-                if hist and hist[-1][0] != sha and prev != label and not (authoring and prev in authored):
+                # not overwrites: an agent revising a file it authors (script, report), and the same
+                # invocation (script + arguments) regenerating its own output, possibly with a newer
+                # script version (stale outputs of superseded versions are reported separately).
+                # The same script with DIFFERENT arguments writing one file is a collision
+                # (GRACE: electron and proton runs sharing a merged file name).
+                same_script = script is not None and step_script.get(prev) == invocation
+                if hist and hist[-1][0] != sha and prev != label and not (authoring and prev in authored)                         and not same_script:
                     overwrites.setdefault(rel, [prev]).append(label)
                 hist.append((sha, label))
 

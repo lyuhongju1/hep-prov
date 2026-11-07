@@ -78,3 +78,22 @@ def test_counterfactual_keeps_numbers_that_do_depend_on_it(tmp_path):
     root = _inspect_and_reject(tmp_path, cite_stale=True)
     kinds = {f["kind"] for f in audit_run(root, root / "report.md", counterfactual=True)["flags"]}
     assert "claim_from_tainted_input" in kinds
+
+
+def test_superseded_output_read_by_a_later_step_is_flagged(tmp_path):
+    """Agent fixes its script, re-runs it for config B only; the summary reads config A's stale output."""
+    root = tmp_path / "run"
+    root.mkdir()
+    rec = Recorder(root)
+    rec.init()
+    rec.write_file("sim.py", "import sys, json\nc = sys.argv[1]\njson.dump({'res': 0.10}, open(f'res_{c}.json', 'w'))\n")
+    rec.exec([PY, "sim.py", "A"], label="run sim A", echo=False)
+    rec.exec([PY, "sim.py", "B"], label="run sim B", echo=False)
+    rec.write_file("sim.py", "import sys, json\nc = sys.argv[1]\njson.dump({'res': 0.12}, open(f'res_{c}.json', 'w'))\n")
+    rec.exec([PY, "sim.py", "B"], label="rerun sim B (fixed)", echo=False)
+    rec.write_file("summary.py", "import json\nprint(json.load(open('res_A.json'))['res'], json.load(open('res_B.json'))['res'])\n")
+    rec.exec([PY, "summary.py"], label="summary", echo=False)
+    res = audit_run(root)
+    sup = [f for f in res["flags"] if f["kind"] == "superseded_output"]
+    assert [f["path"] for f in sup] == ["res_A.json"]
+    assert sup[0]["severity"] == "defect" and sup[0]["read_afterwards"]

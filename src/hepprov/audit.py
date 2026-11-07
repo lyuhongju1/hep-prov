@@ -68,6 +68,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
                 sev = "info"   # fixed later, or the agent "ran" a non-script (e.g. a CSV)
         elif f["kind"] == "overwrite" and str(f.get("path", "")).lower().endswith(CODE_SUFFIXES):
             sev = "info"
+        elif f["kind"] == "superseded_output" and not f.get("read_afterwards"):
+            sev = "info"     # stale output nobody read again
         elif f["kind"] == "unexplained_claim" and f.get("approximate"):
             sev = "info"     # "about 360-430", "p ~ 0.97": not a precise claim
         elif f["kind"] == "claim_from_tainted_input" and f.get("disclosed"):
@@ -162,6 +164,16 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                 produced.update(json_leaves(p, f"json@{d.get('label')}")[0])
         for e in d.get("emits", []):
             produced[f"emit:{d.get('label')}:{e['name']}"] = float(e["value"])
+
+    # outputs produced by a superseded version of their script (natural long-pipeline mistake)
+    from hepprov.superseded import superseded_outputs
+    for so in superseded_outputs(m):
+        read = so["read_afterwards_by"]
+        flags.append(_flag("provenance", "superseded_output",
+                           f"written by {so['produced_by']} with an older version of {so['script']}, which was "
+                           f"changed and re-run later without regenerating this file"
+                           + (f"; read afterwards by {', '.join(read)}" if read else ""),
+                           path=so["path"], step=so["produced_by"], read_afterwards=bool(read)))
 
     # static checks on executed scripts
     for seq, label, script in executed_scripts(m):
