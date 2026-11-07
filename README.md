@@ -8,7 +8,7 @@ Provenance recorder and verifier for AI agents doing physics. **Status:**
   - The agents handled all 30 data-visible traps themselves.
   - HEP-Prov detected 12 of 12 mid-run input changes, including 2 statistically identical swaps that the agent missed.
 
-Design: [DESIGN.md](DESIGN.md).
+Design: [DESIGN.md](DESIGN.md). **Results summary: [docs/RESULTS_SUMMARY.md](docs/RESULTS_SUMMARY.md).**
 
 ```bash
 hepprov init --declare detector.gdml        # start a run; pre-existing files are recorded, not trusted
