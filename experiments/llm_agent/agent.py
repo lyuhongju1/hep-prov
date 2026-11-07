@@ -60,7 +60,36 @@ FAULTS = {
     "T3_geometry_stale": ("optimized/electron_5MeV.csv", -0.03),
     "T6_units": ("data/calo_2MeV.csv", +0.03),
 }
-ENV_FAULT = False
+ENV_FAULT = None   # None | "scaled" | "consistent"
+
+
+def _resample(path, kind, seed=97):
+    """Replace a data file with a fresh sample from the SAME distribution (another seed).
+
+    The physics stays consistent: nothing in the data distinguishes it from the
+    original, which is what a stale or substituted file from an equivalent run
+    looks like (the GRACE 5000-event file sat exactly on the linear response).
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    if kind == "poisson":
+        lines = path.read_text(encoding="utf-8").splitlines()
+        vals = [int(r.split(",")[1]) for r in lines[1:]]
+        mean = sum(vals) / len(vals)
+        new = rng.poisson(mean, len(vals))
+        path.write_text(lines[0] + "\n" + "".join(f"{i},{int(v)}\n" for i, v in enumerate(new)), encoding="utf-8")
+    else:  # gaussian with the file's own mean and spread
+        lines = path.read_text(encoding="utf-8").splitlines()
+        vals = [float(r.split(",")[1]) for r in lines[1:]]
+        n = len(vals)
+        mu = sum(vals) / n
+        sd = (sum((x - mu) ** 2 for x in vals) / (n - 1)) ** 0.5
+        new = rng.normal(mu, sd, n)
+        path.write_text(lines[0] + "\n" + "".join(f"{i},{x:.6f}\n" for i, x in enumerate(new)), encoding="utf-8")
+    return True
+
+
+CONSISTENT_KIND = {"T1_light_yield": "poisson", "T3_geometry_stale": "poisson", "T6_units": "gaussian"}
 
 SYSTEM = (
     "You are an experimental physicist doing a data analysis on your own. You have a working directory "
@@ -182,10 +211,16 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
                 text, is_err = f"tool error: {e}", True
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text, "is_error": is_err})
             if fault and not fault_applied and b.name == "run_python" and not is_err:
-                from hepprov.counterfactual import perturb_file
                 target, eps = fault
-                if perturb_file(root / target, eps):
-                    fault_applied = {"file": target, "scale": 1 + eps, "after_turn": turns}
+                if ENV_FAULT == "consistent":
+                    if _resample(root / target, CONSISTENT_KIND[task.id]):
+                        fault_applied = {"file": target, "mode": "consistent (fresh sample, same truth)",
+                                         "after_turn": turns}
+                else:
+                    from hepprov.counterfactual import perturb_file
+                    if perturb_file(root / target, eps):
+                        fault_applied = {"file": target, "mode": "scaled", "scale": 1 + eps, "after_turn": turns}
+                if fault_applied:
                     log.write(json.dumps({"turn": turns, "env_fault": fault_applied}) + "\n")
             log.write(json.dumps({"turn": turns, "tool": b.name, "input": b.input, "is_error": is_err,
                                   "result": text[:2000]}) + "\n")
@@ -206,7 +241,8 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--suite", choices=["basic", "hard", "all"], default="basic")
     ap.add_argument("--model", choices=sorted(MODELS), default="claude-opus-5-5")
-    ap.add_argument("--env-fault", action="store_true", help="inject an environment fault (see FAULTS)")
+    ap.add_argument("--env-fault", choices=["scaled", "consistent"], default=None,
+                    help="inject an environment fault (see FAULTS)")
     a = ap.parse_args()
     global MODEL, BETAS, FALLBACKS, PRICE, ENV_FAULT
     ENV_FAULT = a.env_fault

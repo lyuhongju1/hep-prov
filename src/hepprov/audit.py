@@ -64,8 +64,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
         sev = "defect"
         if f["kind"] == "failed_step":
             label = f.get("step") or ""
-            if any(label.endswith(sc) for sc in ok_scripts):
-                sev = "info"
+            if any(label.endswith(sc) for sc in ok_scripts) or not label.endswith(".py"):
+                sev = "info"   # fixed later, or the agent "ran" a non-script (e.g. a CSV)
         elif f["kind"] == "overwrite" and str(f.get("path", "")).lower().endswith(CODE_SUFFIXES):
             sev = "info"
         elif f["kind"] == "unexplained_claim" and f.get("approximate"):
