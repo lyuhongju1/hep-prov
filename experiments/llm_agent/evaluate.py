@@ -32,12 +32,12 @@ for tdir in sorted(p for p in out.iterdir() if p.is_dir()):
     print(f"truth: {json.dumps(truth['truth'])[:300]}")
     if truth.get("traps"):
         print(f"traps: {truth['traps']}")
-    print(f"verify: {res['verify_counts']}   flags: {len(res['flags'])}")
+    print(f"verify: {res['verify_counts']}   flags: {len(res['flags'])} (defect {res.get('n_defect_flags')})")
     for k, c in res.get("counterfactual", {}).items():
         print(f"  counterfactual {k}: {c}")
     for f in res["flags"]:
         where = f.get("path") or f.get("step") or f.get("sweep") or f.get("claim") or ""
-        print(f"  [{f['detector']}:{f['kind']}] {where}  {f['detail'][:140]}")
+        print(f"  [{f.get('severity', '?')}:{f['detector']}:{f['kind']}] {where}  {f['detail'][:140]}")
     if report.exists():
         print("--- report.md ---")
         print(report.read_text(encoding="utf-8", errors="replace")[:3500])

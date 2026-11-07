@@ -20,6 +20,7 @@ variants of the grammar are defect signatures.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,47 @@ from hepprov.verify import (attested_files, code_literals, emitted_values, pool_
 
 
 WEAK_NULL = 0.05   # a report-level formula match above this chance rate does not explain a number
+
+
+_APPROX = ("about", "approximately", "approx", "roughly", "around", "~", "\u2248", "of order", "nearly")
+
+
+def _is_approximate(text: str, pos: int) -> bool:
+    """The number is stated as approximate: a marker within the 24 characters before it (ranges included)."""
+    if pos < 0 or not text:
+        return False
+    before = text[max(0, pos - 24):pos].lower()
+    return any(m in before for m in _APPROX)
+
+
+CODE_SUFFIXES = (".py", ".sh", ".ipynb", ".r", ".jl", ".c", ".cc", ".cpp", ".mac")
+
+
+def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
+    """'defect' flags are evidence problems; 'info' flags are process facts worth a glance.
+
+    info: a failed step whose script later ran successfully (the agent fixed
+    its code), and an overwrite of a code file (the agent editing its own
+    scripts). Overwrites of data files stay defects.
+    """
+    ok_scripts = set()
+    for ev in m.events():
+        d = ev["data"]
+        if ev["kind"] == "exec" and d.get("exit_code") == 0:
+            ok_scripts.update(x for x in d.get("cmd", [])[1:] if x.endswith(".py"))
+    for f in flags:
+        sev = "defect"
+        if f["kind"] == "failed_step":
+            label = f.get("step") or ""
+            if any(label.endswith(sc) for sc in ok_scripts):
+                sev = "info"
+        elif f["kind"] == "overwrite" and str(f.get("path", "")).lower().endswith(CODE_SUFFIXES):
+            sev = "info"
+        elif f["kind"] == "unexplained_claim" and f.get("approximate"):
+            sev = "info"     # "about 360-430", "p ~ 0.97": not a precise claim
+        elif f["kind"] == "claim_from_tainted_input" and f.get("disclosed"):
+            sev = "info"     # the report says which flagged input the number comes from
+        f.setdefault("severity", sev)
 
 
 def _flag(detector: str, kind: str, detail: str, **kw) -> dict[str, Any]:
@@ -64,6 +106,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
     bad_reads: dict[int, list[str]] = {}
     for v in at["violations"]:
         bad_reads.setdefault(v["exec_seq"], []).append(v["path"])
+    bad_paths = sorted({v["path"] for v in at["violations"]})
     tainted: dict[str, str] = {}        # relpath -> why
     tainted_steps: dict[str, str] = {}  # step label -> why (its printed output is tainted too)
     for ev in m.events():
@@ -146,8 +189,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
 
         def taint_of(key: str) -> str | None:
             """Why a support key is tainted, or None. Handles json/table files and printed output."""
-            if key.startswith(("x100:", "/100:")):
-                key = key.split(":", 1)[1]
+            key = re.sub(r"^(?:x|/)(?:100|1000):", "", key)
             tier, _, rest = key.partition(":")
             if tier in ("json", "table"):
                 return tainted_names.get(rest.split(":", 1)[0])
@@ -168,19 +210,27 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             weak = v["verdict"] == "diagnosed" and (v["null_rate"] is None or v["null_rate"] > WEAK_NULL)
             if (v["verdict"] == "unexplained" or weak) and v["sig"] >= min_claim_sig:
                 note = f" (only a chance-level formula match, null {v['null_rate']:.0%})" if weak else ""
-                flags.append(_flag("verify", "unexplained_claim", f"{v['text']}{note}: ...{v['ctx']}..."))
+                approx = _is_approximate(report_text, v.get("pos", -1))
+                flags.append(_flag("verify", "unexplained_claim",
+                                   f"{v['text']}{note}{' (stated as approximate)' if approx else ''}: ...{v['ctx']}...",
+                                   approximate=approx))
             elif v["verdict"] in ("verified", "copy") and v["support"]:
                 whys = [taint_of(s) for s in v["support"]]
                 if all(whys):
+                    near = report_text[max(0, v.get("pos", 0) - 400):v.get("pos", 0) + 400]
+                    disclosed = any(p in near for p in bad_paths)
                     flags.append(_flag("verify", "claim_from_tainted_input",
-                                       f"{v['text']} rests only on {v['support'][0]} ({whys[0]})",
-                                       claim=v["id"]))
+                                       f"{v['text']} rests only on {v['support'][0]} ({whys[0]})"
+                                       + ("; its sentence names the flagged file (disclosed)" if disclosed else ""),
+                                       claim=v["id"], disclosed=disclosed))
         for scope in (ver, ver.get("intermediates") or {}):
             for v in scope.get("verdicts", []):
                 if v["verdict"] == "diagnosed" and all("+[1.0]" in f for f in v["support"]):
                     flags.append(_flag("verify", "placeholder_signature",
                                        f"{v['text']} = {v['formula']} (null {v['null_rate']:.0%})", claim=v["id"]))
-    return {"root": str(root), "flags": flags, "n_flags": len(flags),
+    _assign_severity(flags, m)
+    defects = [f for f in flags if f.get("severity") == "defect"]
+    return {"root": str(root), "flags": flags, "n_flags": len(flags), "n_defect_flags": len(defects),
             "verify_counts": ver["counts"] if ver else None,
             "counterfactual": {k: {"status": c.status, "reason": c.reason, "n_values": c.n_values,
                                    "dependent": len(c.dependent), "nondeterministic": len(c.nondeterministic)}

@@ -48,3 +48,37 @@ These are the residual false-alarm classes on reports from careful agents.
 - Five runs, one model, one seed.
 - No natural defects occurred, so this measures false alarms, not detection.
 - The calibration (`docs/CALIBRATION.md`) must be rerun after these verifier changes.
+
+## Hard suite (same day, claude-opus-5-5, about $0.96)
+
+Five harder tasks (`experiments/llm_agent/tasks_hard.py`), each with a multi-step trap.
+
+| Task | Trap | Agent behavior | Result vs truth |
+|---|---|---|---|
+| T6 units | 4 MeV file in keV | detected it, converted it, checked that excluding it gives the same result | slope 0.9995, a = 0.0498 (1, 0.05) |
+| T7 calibration | run-A calibration at the default path | used run B and said why; found a 1% non-closure (1.980 MeV) | correct. The 1% is real: the generator truncates ADC values to integers (−0.5 count) |
+| T8 duplicates | every event twice | deduplicated (2500 of 5000 rows) and explained the √2 effect on the uncertainty | 0.631 ± 0.010 (0.6308 ± 0.0097) |
+| T9 saturation | 34% of 160 MeV events at the ADC maximum | censored likelihood fit | a = 0.0298, gain 102.29 (0.03, 102.3) |
+| T10 peak | efficiency bin missing | refused to give a total corrected yield; gave a partial yield, labeled as such | yield 1734 ± 77 (1800) |
+
+Across both suites, `claude-opus-5-5` handled **10 of 10 traps correctly**. On tasks of this size it doesn't produce natural defects, so a detection result on unplanted defects still needs weaker agents or much longer tasks.
+
+### Further fixes from the hard suite
+
+Each fix was checked against the D7 fabrications and the clean control. All three fabrications stay flagged and the control stays at 0.
+
+| Source | Fix |
+|---|---|
+| "(9.45 ± 0.12)e-3" read as 9.45 | Exponents on the number or after a parenthesised group are applied |
+| "11.7 MeV" vs evidence 0.0117 GeV | Labeled ×1000 / ÷1000 unit-prefix conversions in identity matching |
+| Process facts flagged as defects | Flag severity. A failed step whose script later ran OK, and an overwrite of a code file, are `info` |
+| Approximate statements ("about 360–430", "p ≈ 0.970") | Unexplained but approximate: `info` |
+| A tainted number whose sentence names the flagged file | Disclosed use: `info` |
+| Small constants (e.g. a nominal 2 MeV) as operands | **Tried and reverted:** they made two of three fabrications "ambiguous" |
+
+### Totals on the ten adjudicated runs
+
+These are the five basic tasks evaluated with the final code, plus the five hard tasks:
+- 8 defect-severity flags. 2 are true: T3's reads of the stale file, which the report discloses. 6 are false alarms: a weighted mean, binomial-model predictions (×2), a trial value that was never printed, a difference from a nominal value stated only in the prompt, and a half-integer threshold.
+- 9 info-severity flags.
+- 0 real defects missed. No real defects occurred, so detection on unplanted defects is still untested.

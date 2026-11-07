@@ -37,7 +37,9 @@ from typing import Any, Iterable
 
 from hepprov.plugins import hep
 
-NUM = re.compile(r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,12})?|\d+\.\d{1,12}|\d{2,})(?!\w|\.\d)")
+NUM = re.compile(r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,12})?|\d+\.\d{1,12}|\d{2,})(?:[eE][-+]?\d{1,3})?(?!\w|\.\d)")
+_PAREN_EXP = re.compile(r"^[^()\n]*?\)\s*(?:[eE]|[×x]\s*10\^?\{?)([-+−]?\d{1,3})\}?")
+CONST = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.]|\.\d)")
 PRIMITIVE = ("log", "data", "emit")
 SIG_GATE = 4
 MULT_CAP = 5
@@ -73,7 +75,17 @@ def extract_claims(text: str) -> list[Claim]:
         st = m.start()
         if st >= 1 and text[st - 1] in "-−" and (st == 1 or not (text[st - 2].isalnum() or text[st - 2] in ".)")):
             s = "-" + s
-        v = float(s)
+        # exponent on the number ("9.45e-3") or after a parenthesised group ("(9.45 ± 0.12)e-3")
+        exp = 0
+        mant = s
+        em = re.search(r"[eE]([-+]?\d+)$", s)
+        if em:
+            exp, mant = int(em.group(1)), s[:em.start()]
+        else:
+            pm = _PAREN_EXP.match(text[m.end():m.end() + 80])
+            if pm and "(" in text[max(0, m.start() - 60):m.start()]:
+                exp = int(pm.group(1).replace("\u2212", "-"))
+        v = float(mant) * (10.0 ** exp)
         if v in (0.0, 1.0, 2.0):
             continue
         # skip arXiv ids and years
@@ -92,8 +104,11 @@ def extract_claims(text: str) -> list[Claim]:
         near = {w.lower() for w in prev_w[-1:] + next_w[:1]}
         if text[line_start:m.start()].count("`") % 2 == 1 or near & METADATA_WORDS:
             continue
-        dec = len(s.split(".")[1]) if "." in s else 0
-        sig = len(s.lstrip("-").replace(".", "").lstrip("0"))
+        mdec = len(mant.split(".")[1]) if "." in mant else 0
+        sig = len(mant.lstrip("-").replace(".", "").lstrip("0"))
+        dec = max(0, mdec - exp)
+        if exp:
+            s = f"{v:.{dec}f}"    # canonical fixed-point text at the implied precision
         ctx = text[max(0, m.start() - 50):m.end() + 30].replace("\n", " ")
         out.append(Claim(f"R{i:04d}", s, v, dec, sig, ctx, m.start()))
     return out
@@ -178,6 +193,7 @@ def attested_files(manifest) -> list[Path]:
     return out
 
 
+_CONV = re.compile(r"^(?:x|/)(?:100|1000):")
 _STDOUT_NUM = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
 
@@ -437,10 +453,10 @@ def classify(claim: Claim, pool: Pool, grammar: bool = True, exclude: str | None
     such support is labelled ``x100:`` / ``/100:``.
     """
     ident = [k for k, v in pool.values.items() if k != exclude and _fmt_eq(v, claim)]
-    if not ident:
-        ident = ([f"x100:{k}" for k, v in pool.values.items() if k != exclude and _fmt_eq(v * 100, claim)]
-                 + [f"/100:{k}" for k, v in pool.values.items() if k != exclude and _fmt_eq(v / 100, claim)])
-    base = lambda k: k.split(":", 1)[1] if k.startswith(("x100:", "/100:")) else k
+    if not ident:  # labelled percent (x100, /100) and unit-prefix (x1000, /1000) conversions
+        for tag, f in (("x100", 100.0), ("/100", 0.01), ("x1000", 1000.0), ("/1000", 0.001)):
+            ident += [f"{tag}:{k}" for k, v in pool.values.items() if k != exclude and _fmt_eq(v * f, claim)]
+    base = lambda k: _CONV.sub("", k)
     prim = [k for k in ident if pool.tier(base(k)) in PRIMITIVE]
     if prim:
         return ClaimVerdict(claim, "verified", prim[:5])
@@ -529,7 +545,7 @@ NEIGHBORHOOD = 400   # characters: same table row / paragraph
 LOW_SIG_MAX_NULL = 0.05
 PRIMITIVE_OPERANDS_MAX = 120
 _COUNT_KEY = re.compile(r":(n|n_events|n_rows_total)$")   # sample sizes: the N in sigma/sqrt(N)
-_ALIAS = re.compile(r"ev\[(R\d+)\]:\S+|claim:(R\d+)=\S+|text:(R\d+)=\S+")
+_ALIAS = re.compile(r"ev\[(R\d+)\]:\S+|claim:(R\d+)=\S+|text:(R\d+|K\d+)=\S+")
 
 
 def _dedupe_values(p: Pool) -> Pool:
@@ -545,7 +561,8 @@ def _dedupe_values(p: Pool) -> Pool:
     return out
 
 
-def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> None:
+def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None,
+                   constants: list[tuple[int, float]] | None = None) -> None:
     """Re-check unexplained claims against nearby numbers of the same report.
 
     Prose and tables derive numbers from neighbours ("+0.660850 (2.609061 ->
@@ -612,10 +629,23 @@ def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> No
 METADATA_WORDS = {"seed", "seeds", "bytes", "byte", "kb", "mb", "gb", "gib", "mib", "version", "gcc", "g++", "commit", "sha256", "sha", "job", "hostname", "pid", "port"}
 
 
+def extract_constants(text: str) -> list[tuple[int, float]]:
+    """Small numbers the claim extractor skips (single digits, 0/1/2): operands only, never claims."""
+    out = []
+    for m in CONST.finditer(text):
+        try:
+            v = float(m.group(0))
+        except ValueError:
+            continue
+        if v < 10:
+            out.append((m.start(), v))
+    return out
+
+
 def verify_report(report_text: str, pool: Pool, grammar: bool = True,
                   intermediates: bool = True) -> dict[str, Any]:
     rv = [classify(c, pool, grammar) for c in extract_claims(report_text)]
-    derive_in_text(rv, pool)
+    derive_in_text(rv, pool)   # small constants are NOT operands: tried, they made fabrications ambiguous
     res = _summ(rv)
     res["pool_size"] = len(pool.values)
     res["grammar_truncated"] = bool(getattr(pool, "grammar_truncated", False))
