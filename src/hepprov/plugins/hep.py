@@ -45,6 +45,8 @@ def _stats(prefix: str, values: list[float], energy_gev: float | None) -> dict[s
     if mu > 0:
         out[f"{prefix}:sigma"] = math.sqrt(var)
         out[f"{prefix}:rel_sigma"] = math.sqrt(var) / mu
+    if n > 1:
+        out[f"{prefix}:sem"] = math.sqrt(var * n / (n - 1)) / math.sqrt(n)   # standard error of the mean
     return out
 
 

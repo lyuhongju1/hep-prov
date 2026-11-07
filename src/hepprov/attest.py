@@ -44,6 +44,7 @@ def attest(manifest: Manifest) -> dict[str, Any]:
     versions: dict[str, list[tuple[str, str]]] = {}   # rel -> [(sha, origin)]
     verdicts: list[ReadVerdict] = []
     overwrites: dict[str, list[str]] = {}
+    authored: set[str] = set()
 
     for ev in manifest.events():
         kind, d, seq = ev["kind"], ev["data"], ev["seq"]
@@ -84,10 +85,15 @@ def attest(manifest: Manifest) -> dict[str, Any]:
                     v = ReadVerdict(seq, label, rel, sha, "not_written_by_run",
                                     "content matches no version this run wrote or declared")
                 verdicts.append(v)
+            authoring = (d.get("cmd") or [""])[0] == "<write_file>"
+            if authoring:
+                authored.add(label)
             for rel, sha in own.items():
                 hist = versions.setdefault(rel, [])
-                if hist and hist[-1][0] != sha and hist[-1][1] != label:
-                    overwrites.setdefault(rel, [hist[-1][1]]).append(label)
+                prev = hist[-1][1] if hist else None
+                # an agent revising a file it authors (script, report) is not an overwrite
+                if hist and hist[-1][0] != sha and prev != label and not (authoring and prev in authored):
+                    overwrites.setdefault(rel, [prev]).append(label)
                 hist.append((sha, label))
 
     violations = [v for v in verdicts if not v.ok]

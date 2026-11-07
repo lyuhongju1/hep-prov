@@ -26,7 +26,11 @@ from typing import Any
 from hepprov.attest import attest
 from hepprov.manifest import Manifest
 from hepprov.static import executed_scripts, silent_skips, transcribed_literals
-from hepprov.verify import attested_files, emitted_values, pool_from_files, stdout_values, verify_report
+from hepprov.verify import (attested_files, code_literals, emitted_values, pool_from_files, stdout_values,
+                             verify_report)
+
+
+WEAK_NULL = 0.05   # a report-level formula match above this chance rate does not explain a number
 
 
 def _flag(detector: str, kind: str, detail: str, **kw) -> dict[str, Any]:
@@ -132,6 +136,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
     pool = pool_from_files(attested_files(m))
     pool.add(emitted_values(m))
     pool.add(stdout_values(m))
+    pool.add(code_literals(m))
     for inv in getattr(pool, "invariants", []):
         flags.append(_flag("invariants", inv["code"], inv["detail"], sweep=inv["sweep"]))
     ver = None
@@ -160,8 +165,10 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             return None
 
         for v in ver["verdicts"]:
-            if v["verdict"] == "unexplained" and v["sig"] >= min_claim_sig:
-                flags.append(_flag("verify", "unexplained_claim", f"{v['text']}: ...{v['ctx']}..."))
+            weak = v["verdict"] == "diagnosed" and (v["null_rate"] is None or v["null_rate"] > WEAK_NULL)
+            if (v["verdict"] == "unexplained" or weak) and v["sig"] >= min_claim_sig:
+                note = f" (only a chance-level formula match, null {v['null_rate']:.0%})" if weak else ""
+                flags.append(_flag("verify", "unexplained_claim", f"{v['text']}{note}: ...{v['ctx']}..."))
             elif v["verdict"] in ("verified", "copy") and v["support"]:
                 whys = [taint_of(s) for s in v["support"]]
                 if all(whys):

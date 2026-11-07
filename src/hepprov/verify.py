@@ -214,6 +214,35 @@ def stdout_values(manifest, max_values_per_step: int = 3000) -> dict[str, float]
     return out
 
 
+def code_literals(manifest) -> dict[str, float]:
+    """``code`` tier: numeric literals in the scripts the run executed (parameters the agent chose).
+
+    Supports report statements such as "4000 bootstrap resamples" or "300
+    seeds". It is intermediate-level support, never primitive evidence. A
+    literal that equals an earlier step's result is flagged separately as a
+    transcription by the static checks.
+    """
+    import ast
+    out: dict[str, float] = {}
+    seen = set()
+    for ev in manifest.events():
+        if ev["kind"] != "exec":
+            continue
+        d = ev["data"]
+        script = next((a for a in d.get("cmd", [])[1:] if a.endswith(".py")), None)
+        if not script or script in seen:
+            continue
+        seen.add(script)
+        try:
+            tree = ast.parse((manifest.root / script).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float))                     and not isinstance(node.value, bool):
+                out[f"code:{script}:{node.lineno}:{node.col_offset}"] = float(node.value)
+    return out
+
+
 def emitted_values(manifest) -> dict[str, float]:
     """``emit`` tier: values declared by scripts under ``hepprov exec`` (latest per name and step)."""
     out: dict[str, float] = {}
@@ -276,6 +305,8 @@ def csv_leaves(path: Path, tag: str = "table", max_rows: int = TABLE_MAX_ROWS) -
         pre = f"data:{path.as_posix()}:{col}"
         out.update({f"{pre}:n": float(n), f"{pre}:sum": float(sum(vals)), f"{pre}:mean": mu,
                     f"{pre}:std": st.pstdev(vals), f"{pre}:std_sample": st.stdev(vals),
+                    f"{pre}:sem": st.stdev(vals) / math.sqrt(n),            # standard error of the mean
+                    f"{pre}:sem_pop": st.pstdev(vals) / math.sqrt(n),
                     f"{pre}:min": min(vals), f"{pre}:max": max(vals)})
         if mu:
             out[f"{pre}:rel_std"] = st.pstdev(vals) / mu
@@ -341,12 +372,14 @@ def _formulas(pool: Pool, exclude: str | None = None):
             if b:
                 yield f"{ka} / {kb}", a / b
                 yield f"({ka} - {kb}) / {kb} * 100", (a - b) / b * 100
-                for e in MEV_SCALES:  # unit-loss class: a ratio missing or doubling an energy factor
+                for e in (() if getattr(pool, "local", False) else MEV_SCALES):  # unit-loss class (not in prose)
                     yield f"{ka} / {kb} / {e}", a / b / e
                     yield f"{ka} / {kb} * {e}", a / b * e
             yield f"{ka} * (1 + {kb}/100)", a * (1 + b / 100)
             yield f"{ka} * {kb}", a * b
             yield f"{ka} - {kb}", a - b
+            if b > 0:  # standard errors: sigma / sqrt(N)
+                yield f"{ka} / sqrt({kb})", a / math.sqrt(b)
             if b:
                 yield f"{ka} / {kb} * 100", a / b * 100
             if ka < kb:  # a + b is symmetric: once per pair
@@ -420,6 +453,8 @@ def classify(claim: Claim, pool: Pool, grammar: bool = True, exclude: str | None
         if hits and len(hits) <= MULT_CAP:
             return ClaimVerdict(claim, "diagnosed", formula=hits[0], support=hits,
                                 null_rate=_decoy_rate(claim, pool))
+        # many global matches of unrelated quantities are chance, not an explanation;
+        # the claim stays unexplained (report-local derivation may still explain it)
     return ClaimVerdict(claim, "unexplained")
 
 
@@ -491,7 +526,23 @@ def corroborate(verdicts: list[ClaimVerdict], pool: Pool, n: int = N_DECOYS) -> 
 
 
 NEIGHBORHOOD = 400   # characters: same table row / paragraph
+LOW_SIG_MAX_NULL = 0.05
+PRIMITIVE_OPERANDS_MAX = 120
+_COUNT_KEY = re.compile(r":(n|n_events|n_rows_total)$")   # sample sizes: the N in sigma/sqrt(N)
 _ALIAS = re.compile(r"ev\[(R\d+)\]:\S+|claim:(R\d+)=\S+|text:(R\d+)=\S+")
+
+
+def _dedupe_values(p: Pool) -> Pool:
+    out, seen = Pool(), set()
+    for k, v in p.values.items():
+        key = float(f"{v:.12g}")
+        if key not in seen:
+            seen.add(key)
+            out.values[k] = v
+    # report-local pools use plain prose arithmetic only: the unit-loss scale rules
+    # are for diagnosing intermediates and would triple the chance of coincidences
+    object.__setattr__(out, "local", True)
+    return out
 
 
 def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> None:
@@ -511,10 +562,19 @@ def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> No
 
     Each carries the formula and a decoy null over that local pool.
     """
+    # sample sizes from primitive evidence are legitimate operands (the N in sigma/sqrt(N));
+    # other primitive values are not added, since every extra operand inflates ambiguity
+    prim = {}
+    if pool is not None:
+        prim = {f"prim:{k}": v for k, v in pool.values.items()
+                if pool.tier(k) in PRIMITIVE and _COUNT_KEY.search(k)}
+        if len(prim) > PRIMITIVE_OPERANDS_MAX:
+            prim = {}
     for v in verdicts:
-        if v.verdict != "unexplained" or v.claim.sig < SIG_GATE or v.claim.pos < 0:
+        if v.verdict != "unexplained" or v.claim.sig < 3 or v.claim.pos < 0:
             continue
         sup, txt = Pool(), Pool()
+        sup.values.update({k: x for k, x in prim.items() if not _fmt_eq(x, v.claim)})
         for u in verdicts:
             if u is v or abs(u.claim.pos - v.claim.pos) > NEIGHBORHOOD or _fmt_eq(u.claim.value, v.claim):
                 continue
@@ -525,6 +585,9 @@ def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> No
                 sup.values[f"claim:{u.claim.id}={u.claim.text}"] = u.claim.value
             txt.values[f"text:{u.claim.id}={u.claim.text}"] = u.claim.value
         txt.values.update(sup.values)
+        # one operand per distinct value: identical numbers under different names (e.g. the
+        # same N in every log cell) would otherwise multiply one formula into many "matches"
+        sup, txt = _dedupe_values(sup), _dedupe_values(txt)
         for tier, lp in (("derived", sup), ("derived_from_text", txt)):
             if len(lp.values) < 2:
                 continue
@@ -532,9 +595,17 @@ def derive_in_text(verdicts: list[ClaimVerdict], pool: Pool | None = None) -> No
             # count distinct formulas over CLAIMS, not over aliases of one claim
             # (its printed value and its full-precision evidence values)
             distinct = {_ALIAS.sub(lambda m: m.group(1) or m.group(2) or m.group(3), h) for h in hits}
+            if hits and len(distinct) > MULT_CAP:
+                # consistent with several derivations: not evidence of anything, not a defect signal
+                v.verdict, v.formula, v.support = "ambiguous", hits[0], hits[:MULT_CAP + 1]
+                continue
             if hits and len(distinct) <= MULT_CAP:
-                v.verdict, v.formula, v.support = tier, hits[0], hits
-                v.null_rate = _decoy_rate(v.claim, lp)
+                null = _decoy_rate(v.claim, lp)
+                # below the significant-figure gate a derivation counts only if
+                # its measured chance rate is low (the gate is replaced by the null)
+                if v.claim.sig < SIG_GATE and null > LOW_SIG_MAX_NULL:
+                    continue
+                v.verdict, v.formula, v.support, v.null_rate = tier, hits[0], hits, null
                 break
 
 
