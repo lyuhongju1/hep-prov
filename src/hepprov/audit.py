@@ -33,7 +33,8 @@ def _flag(detector: str, kind: str, detail: str, **kw) -> dict[str, Any]:
     return {"detector": detector, "kind": kind, "detail": detail, **kw}
 
 
-def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig: int = 3) -> dict[str, Any]:
+def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig: int = 3,
+              counterfactual: bool = False) -> dict[str, Any]:
     root = Path(root).resolve()
     m = Manifest(root)
     flags: list[dict[str, Any]] = []
@@ -42,8 +43,13 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
         flags.append(_flag("chain", "chain_broken", f"line {e.line}: {e.reason}"))
 
     at = attest(m)
+    report_text = (Path(report).read_text(encoding="utf-8", errors="ignore")
+                   if report is not None and Path(report).exists() else "")
     for v in at["violations"]:
-        flags.append(_flag("attest", v["kind"], v["detail"], path=v["path"], step=v["label"]))
+        disclosed = bool(report_text) and v["path"] in report_text
+        flags.append(_flag("attest", v["kind"],
+                           v["detail"] + ("; the report names this file (disclosed)" if disclosed else ""),
+                           path=v["path"], step=v["label"], disclosed=disclosed))
     for rel, steps in at["overwrites"].items():
         flags.append(_flag("attest", "overwrite", " -> ".join(steps), path=rel))
 
@@ -67,6 +73,22 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             tainted_steps.setdefault(label, reasons[0])
             for rel in d.get("writes", {}):
                 tainted.setdefault(rel, f"{label}: {reasons[0]}")
+
+    # Counterfactual re-execution of steps that read a flagged input directly
+    cf_results: dict = {}
+    if counterfactual:
+        from hepprov.counterfactual import rerun_step
+        for ev in m.events():
+            if ev["kind"] != "exec" or ev["seq"] not in bad_reads:
+                continue
+            d = ev["data"]
+            label = d.get("label") or f"exec#{ev['seq']}"
+            script = next((a for a in d.get("cmd", [])[1:] if a.endswith(".py")), None)
+            log = root / ".hepprov" / "logs" / f"{ev['seq']:06d}" / "stdout.bin"
+            if not script or not log.exists():
+                continue
+            cf_results[label] = rerun_step(root, script, log.read_bytes().decode("utf-8", "replace"),
+                                           sorted(set(bad_reads[ev["seq"]])), label)
 
     # per-step outputs and prior quantities (for transcription checks)
     prior_by_seq: dict[int, dict[str, float]] = {}
@@ -125,7 +147,16 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             if tier in ("json", "table"):
                 return tainted_names.get(rest.split(":", 1)[0])
             if tier == "stdout":
-                return tainted_steps.get(rest.rsplit(":", 1)[0])
+                label, _, idx = rest.rpartition(":")
+                why = tainted_steps.get(label)
+                cf = cf_results.get(label)
+                if why and cf is not None and cf.status == "ok" and idx.isdigit():
+                    i = int(idx)
+                    if i not in cf.dependent and i not in cf.nondeterministic:
+                        return None   # re-execution with the flagged input perturbed left this value unchanged
+                    return why + (" (counterfactual: depends on it)" if i in cf.dependent
+                                  else " (counterfactual: nondeterministic, inconclusive)")
+                return why
             return None
 
         for v in ver["verdicts"]:
@@ -143,4 +174,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                     flags.append(_flag("verify", "placeholder_signature",
                                        f"{v['text']} = {v['formula']} (null {v['null_rate']:.0%})", claim=v["id"]))
     return {"root": str(root), "flags": flags, "n_flags": len(flags),
-            "verify_counts": ver["counts"] if ver else None}
+            "verify_counts": ver["counts"] if ver else None,
+            "counterfactual": {k: {"status": c.status, "reason": c.reason, "n_values": c.n_values,
+                                   "dependent": len(c.dependent), "nondeterministic": len(c.nondeterministic)}
+                               for k, c in cf_results.items()}}

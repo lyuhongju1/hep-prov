@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from hepprov.audit import audit_run  # noqa: E402
+sys.stdout.reconfigure(encoding="utf-8")
 
 out = Path(sys.argv[1])
 rows = []
@@ -23,7 +24,7 @@ for tdir in sorted(p for p in out.iterdir() if p.is_dir()):
     truth = json.loads((tdir / "truth.json").read_text(encoding="utf-8"))
     run = tdir / "run"
     report = run / "report.md"
-    res = audit_run(run, report if report.exists() else None)
+    res = audit_run(run, report if report.exists() else None, counterfactual=True)
     rows.append({"task": truth["id"], "meta": meta, "truth": truth, "flags": res["flags"],
                  "verify_counts": res["verify_counts"]})
     print("=" * 100)
@@ -32,6 +33,8 @@ for tdir in sorted(p for p in out.iterdir() if p.is_dir()):
     if truth.get("traps"):
         print(f"traps: {truth['traps']}")
     print(f"verify: {res['verify_counts']}   flags: {len(res['flags'])}")
+    for k, c in res.get("counterfactual", {}).items():
+        print(f"  counterfactual {k}: {c}")
     for f in res["flags"]:
         where = f.get("path") or f.get("step") or f.get("sweep") or f.get("claim") or ""
         print(f"  [{f['detector']}:{f['kind']}] {where}  {f['detail'][:140]}")
