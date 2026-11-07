@@ -161,3 +161,28 @@ What this establishes:
 3. On careful runs the residual cost is a few false-alarm flags per report. These come from prose arithmetic beyond the grammar and from values computed but never printed. The planted-defect calibration is unchanged after every fix (27/27, 0/20).
 
 Limits: one task family (light-yield, calorimeter, efficiency, peak fits), single seeds per condition, and environment faults injected by the harness rather than arising from a real concurrent system.
+
+## Long open-ended suite (4 runs, about $0.43)
+
+`agent.py --suite long` (caps of 60 turns and $5). Two tasks with analytic truth (`experiments/llm_agent/tasks_long.py`):
+- **L1:** a calorimeter design scan. The agent writes the MC for four absorber thicknesses × six energies, fits the resolution terms, and picks the best design within a 50-layer budget. Truth: t = 4 mm.
+- **L2:** selection efficiency and purity across six runs, a consistency check and a combination. Run 4 has a 1.8× wider quality distribution.
+
+Seed 1, Haiku 5.5 and Opus 5.5.
+
+| Run | Turns | Result |
+|---|---|---|
+| Haiku L1 | 8 | recommends t = 4 mm (40 layers); excludes 2 mm as over budget; notes 160/6 is not an integer layer count |
+| Haiku L2 | 8 | excludes run 4 (z ≈ −9.9, χ² 96.4/5 → 5.5/4 without it); ε = 0.8985 ± 0.0038 |
+| Opus L1 | 5 | recommends t = 4 mm; notes the spec fixes the resolution model, so the MC only checks the fits |
+| Opus L2 | 8 | KS tests isolate run 4's quality variable (1.8× wider, partly negative); excludes it with justification |
+
+**4 of 4 correct.** These tasks were not "long" for the agents: they wrote compact pipelines and finished in 5–8 turns, with no iteration on their own code. So the long-pipeline mistakes these tasks invite (superseded intermediates, retyped numbers) did not occur. Seeing them would need much larger tasks, or agents that work incrementally, step by step.
+
+Remaining defect flags, all false alarms: arithmetic with small numbers in prose (26 × 6 = 156 mm, 160 / 27 = 5.93 mm), a stated range ("29.6–31%"), and a failed `run_python` on a mistyped path.
+
+## Verifier additions from this round
+
+- **Uncertainty-aware prose arithmetic.** From the report's "x ± s" pairs: inverse-variance weighted means and their errors, combined errors and pulls, roots and powers. Full-precision values are used when the inputs are supported. Accepted only at exact digits with a chance rate of 5% or less. Effect: T3's weighted average 21.99 and T4's fourth root 0.970 are explained. The planted fabrications stay flagged.
+- **Superseded-output detector** (`superseded.py`). An output written by an older version of a script that was later changed and re-run, and that wasn't regenerated. Defect if a later step reads it, info otherwise. Calibrated as defect class D10.
+- **Overwrite rule.** The same invocation (script and arguments) regenerating its own output is a regeneration, not an overwrite. The same script with different arguments writing one file is still a collision (D6, GRACE's merged-file bug). Overwrites of documents the agent writes itself (`report.md`) are info.
