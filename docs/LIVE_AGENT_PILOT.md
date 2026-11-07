@@ -102,3 +102,28 @@ Two consequences for HEP-Prov:
 
 1. **A detection result needs failures the agent cannot see.** These are provenance-only failures: an input changed by something else between the agent's steps (a concurrent job, a shared scratch directory, GRACE's batch-file collision), or a stale cached intermediate with plausible content. No amount of data inspection by the agent reveals them. Read attestation does. This is the next experiment (`env_faults` below).
 2. **For careful agents, HEP-Prov's role is verification, not correction.** On these runs it independently confirms that the reported numbers trace to the data, at a cost of 0–3 false-alarm defect flags per report. That's the "trust but verify" use, and the residual false alarms are the cost.
+
+## Environment faults: a data file changes mid-run (6 runs, about $0.66)
+
+`agent.py --env-fault`. After the agent's first successful script run, the harness rewrites one declared data file outside the recorder, with every value scaled. This mimics a concurrent job or a shared scratch area.
+
+| Task | File | Scale |
+|---|---|---|
+| T1 | `data/electron_5MeV.csv` | ×0.96 |
+| T3 | `optimized/electron_5MeV.csv` | ×0.97 |
+| T6 | `data/calo_2MeV.csv` | ×1.03 |
+
+Seed 3, Haiku 5.5 and Opus 5.5. The fault fired at turn 2–3 in five runs, and at turn 8 for Haiku T6.
+
+**The agents.** 5 of 6 noticed the change themselves. They re-read the file, compared it with their first inspection, and either refused to choose a version or used the original and reported both.
+- Opus, all three: "the 5 MeV file changed during the analysis ... the later contents are the first contents multiplied by 0.9600"; "overwritten while I was analysing it ... I have not chosen between them".
+- Haiku T1 and T3: "My first inspection gave a mean of 6252.2 ... a later read gave 6002.2"; reported both versions.
+- Haiku T6 did not notice the change itself. It flagged the 2 MeV point as a 3% (37σ) anomaly and excluded it from the headline fit, so the headline is still correct.
+
+**HEP-Prov detected the fault in 6 of 6 runs.** It raised `written_outside_recorder` on exactly the rewritten file, at the reads that saw the new version. Counterfactual re-execution then marked which reported numbers depend on that file: 7–40 values per step.
+
+**Lesson.** This fault was still visible in the data. Scaling one energy point breaks linearity, and careful agents check linearity. A fault that only provenance can see must leave the physics consistent. The real GRACE stale file is the template: its 5000-event entry sat exactly on the linear response. Next: replace a file with a statistically equivalent sample from another seed and the same truth, which leaves nothing for data inspection to find.
+
+Notes:
+- Flags per run are high (17–37 defect flags), and almost all of them are true dependencies on the changed file. Reports describe the file as "the 5 MeV file" rather than by path, so the disclosure matcher (path in the same sentence) doesn't downgrade them.
+- `failed_step` is raised when an agent calls `run_python` on a non-script (e.g. `data/README.txt`). It should be `info`.
