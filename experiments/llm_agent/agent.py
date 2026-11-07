@@ -129,7 +129,8 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
             outcome = f"api_error_{e.status_code}"
             break
         cost += _cost(resp.usage)
-        log.write(json.dumps({"turn": turns, "request_id": resp._request_id, "model": resp.model,
+        log.write(json.dumps({"turn": turns, "message_id": resp.id,
+                              "request_id": getattr(resp, "_request_id", None), "model": resp.model,
                               "stop_reason": resp.stop_reason, "usage": resp.usage.to_dict(),
                               "content": [b.to_dict() for b in resp.content]}, default=str) + "\n")
         log.flush()

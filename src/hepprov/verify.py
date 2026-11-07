@@ -178,6 +178,42 @@ def attested_files(manifest) -> list[Path]:
     return out
 
 
+_STDOUT_NUM = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
+
+
+def stdout_values(manifest, max_values_per_step: int = 3000) -> dict[str, float]:
+    """``stdout`` tier: numbers printed by recorded commands (attested by the stdout sha256).
+
+    Agents usually communicate results by printing them. The recorder keeps
+    each command's stdout and its hash; output whose bytes no longer match
+    the hash is not used.
+    """
+    from hepprov.hashing import sha256_bytes
+
+    out: dict[str, float] = {}
+    for ev in manifest.events():
+        if ev["kind"] != "exec" or not ev["data"].get("stdout_sha256"):
+            continue
+        f = manifest.root / ".hepprov" / "logs" / f"{ev['seq']:06d}" / "stdout.bin"
+        try:
+            raw = f.read_bytes()
+        except OSError:
+            continue
+        if sha256_bytes(raw) != ev["data"]["stdout_sha256"]:
+            continue
+        label = ev["data"].get("label") or f"exec#{ev['seq']}"
+        for i, m in enumerate(_STDOUT_NUM.finditer(raw.decode("utf-8", "replace"))):
+            if i >= max_values_per_step:
+                break
+            try:
+                v = float(m.group(0))
+            except ValueError:
+                continue
+            if math.isfinite(v):
+                out[f"stdout:{label}:{i}"] = v
+    return out
+
+
 def emitted_values(manifest) -> dict[str, float]:
     """``emit`` tier: values declared by scripts under ``hepprov exec`` (latest per name and step)."""
     out: dict[str, float] = {}
@@ -362,9 +398,17 @@ def _decoy_rate(target: Claim, pool: Pool, n: int = N_DECOYS) -> float:
 
 
 def classify(claim: Claim, pool: Pool, grammar: bool = True, exclude: str | None = None) -> ClaimVerdict:
-    """``exclude``: the claim's own pool entry (for intermediate targets), never its own support."""
+    """``exclude``: the claim's own pool entry (for intermediate targets), never its own support.
+
+    Identity also accepts a percent conversion (x100 or /100) of a pool value;
+    such support is labelled ``x100:`` / ``/100:``.
+    """
     ident = [k for k, v in pool.values.items() if k != exclude and _fmt_eq(v, claim)]
-    prim = [k for k in ident if pool.tier(k) in PRIMITIVE]
+    if not ident:
+        ident = ([f"x100:{k}" for k, v in pool.values.items() if k != exclude and _fmt_eq(v * 100, claim)]
+                 + [f"/100:{k}" for k, v in pool.values.items() if k != exclude and _fmt_eq(v / 100, claim)])
+    base = lambda k: k.split(":", 1)[1] if k.startswith(("x100:", "/100:")) else k
+    prim = [k for k in ident if pool.tier(base(k)) in PRIMITIVE]
     if prim:
         return ClaimVerdict(claim, "verified", prim[:5])
     if ident:

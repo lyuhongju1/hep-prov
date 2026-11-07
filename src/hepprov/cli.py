@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{f['detector']}:{f['kind']}] {where}  {f['detail'][:150]}")
         return 1 if res["flags"] else 0
     if a.cmd == "verify":
-        from hepprov.verify import attested_files, emitted_values, pool_from_files, verify_report
+        from hepprov.verify import attested_files, emitted_values, pool_from_files, stdout_values, verify_report
         if a.archive:
             files = [p for p in root.rglob("*") if p.is_file() and ".hepprov" not in p.parts]
             pool = pool_from_files(files)
@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             m = Manifest(root)
             pool = pool_from_files(attested_files(m))
             pool.add(emitted_values(m))
+            pool.add(stdout_values(m))
         res = verify_report(Path(a.report).read_text(encoding="utf-8", errors="ignore"),
                             pool, grammar=not a.no_grammar)
         res["mode"] = "archive" if a.archive else "attested"
