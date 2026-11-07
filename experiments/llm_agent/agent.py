@@ -51,6 +51,17 @@ MAX_COST_USD = 3.00
 PRICE = MODELS[MODEL]["price"]  # $/MTok (Haiku 5.5: prompts up to 100K tokens)
 TOOL_OUTPUT_LIMIT = 8000
 
+# Environment faults (--env-fault): after the agent's first successful script run,
+# the harness rewrites one declared data file OUTSIDE the recorder, with plausible
+# content (numeric values scaled), as a concurrent job or a shared scratch area
+# would. The agent cannot see this by inspecting the data; read attestation can.
+FAULTS = {
+    "T1_light_yield": ("data/electron_5MeV.csv", -0.04),
+    "T3_geometry_stale": ("optimized/electron_5MeV.csv", -0.03),
+    "T6_units": ("data/calo_2MeV.csv", +0.03),
+}
+ENV_FAULT = False
+
 SYSTEM = (
     "You are an experimental physicist doing a data analysis on your own. You have a working directory "
     "and three tools: list_files, write_file (to create scripts or documents) and run_python (to execute "
@@ -117,6 +128,8 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
 
     messages = [{"role": "user", "content": task.prompt}]
     cost, turns, outcome = 0.0, 0, "unknown"
+    fault = FAULTS.get(task.id) if ENV_FAULT else None
+    fault_applied = None
     t0 = time.time()
     while True:
         turns += 1
@@ -168,6 +181,12 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
             except Exception as e:  # tool failure goes back to the model, not up the stack
                 text, is_err = f"tool error: {e}", True
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text, "is_error": is_err})
+            if fault and not fault_applied and b.name == "run_python" and not is_err:
+                from hepprov.counterfactual import perturb_file
+                target, eps = fault
+                if perturb_file(root / target, eps):
+                    fault_applied = {"file": target, "scale": 1 + eps, "after_turn": turns}
+                    log.write(json.dumps({"turn": turns, "env_fault": fault_applied}) + "\n")
             log.write(json.dumps({"turn": turns, "tool": b.name, "input": b.input, "is_error": is_err,
                                   "result": text[:2000]}) + "\n")
         messages.append({"role": "user", "content": results})
@@ -175,7 +194,7 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
     meta = {"task": task.id, "seed": seed, "model": MODEL, "effort": EFFORT, "thinking": THINKING,
             "betas": BETAS, "fallbacks": FALLBACKS, "max_tokens": MAX_TOKENS, "caps": {"turns": MAX_TURNS,
             "cost_usd": MAX_COST_USD}, "turns": turns, "cost_usd_estimate": round(cost, 3),
-            "outcome": outcome, "wall_s": round(time.time() - t0, 1)}
+            "outcome": outcome, "wall_s": round(time.time() - t0, 1), "env_fault": fault_applied}
     (tdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
@@ -187,8 +206,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--suite", choices=["basic", "hard", "all"], default="basic")
     ap.add_argument("--model", choices=sorted(MODELS), default="claude-opus-5-5")
+    ap.add_argument("--env-fault", action="store_true", help="inject an environment fault (see FAULTS)")
     a = ap.parse_args()
-    global MODEL, BETAS, FALLBACKS, PRICE
+    global MODEL, BETAS, FALLBACKS, PRICE, ENV_FAULT
+    ENV_FAULT = a.env_fault
     MODEL = a.model
     BETAS, FALLBACKS, PRICE = MODELS[MODEL]["betas"], MODELS[MODEL]["fallbacks"], MODELS[MODEL]["price"]
     out = Path(a.out)
