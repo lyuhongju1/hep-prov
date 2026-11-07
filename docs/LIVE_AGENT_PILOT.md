@@ -127,3 +127,37 @@ Seed 3, Haiku 5.5 and Opus 5.5. The fault fired at turn 2–3 in five runs, and 
 Notes:
 - Flags per run are high (17–37 defect flags), and almost all of them are true dependencies on the changed file. Reports describe the file as "the 5 MeV file" rather than by path, so the disclosure matcher (path in the same sentence) doesn't downgrade them.
 - `failed_step` is raised when an agent calls `run_python` on a non-script (e.g. `data/README.txt`). It should be `info`.
+
+## Physically consistent substitution (6 runs, about $0.63)
+
+`agent.py --env-fault consistent`. After the agent's first successful script run, one declared data file is replaced by a **fresh sample from the same distribution** (another seed). Same mean, same spread, same number of rows, same format. Nothing in the physics distinguishes it from the original. This mirrors GRACE's real stale file, which sat exactly on the linear response. Seed 4, Haiku 5.5 and Opus 5.5.
+
+| Run | Agent noticed the swap? | HEP-Prov `written_outside_recorder` on the swapped file |
+|---|---|---|
+| Haiku T1 | **no**: results presented with no caveat | **yes** |
+| Haiku T3 | yes: "a file changed between my reads" (first rows and mean differ) | yes |
+| Haiku T6 | **no** | **yes** |
+| Opus T1 | yes: "the 5 MeV file changed while I was analysing it ... first read gave min 6002, max 6499 ..." | yes |
+| Opus T3 | yes: "rewritten while I was analysing it", mtime about 5 s later | yes |
+| Opus T6 | yes: different event-by-event content; then tracked the md5 | yes |
+
+**HEP-Prov detected 6 of 6. The agents noticed 4 of 6.** Opus fingerprints its inputs: it compares first rows, min/max and later md5 across reads, which catches even a statistically identical swap. Haiku did that in one of three runs.
+
+**The two Haiku misses are the first live cases where only provenance caught a failure.** The reports present numbers computed from a file that no step of the run produced, and nothing in the data or the report shows it. Read attestation flags it.
+
+## Summary of the live-agent program (41 runs, about $3.70)
+
+| Experiment | Runs | Agent errors / misses | HEP-Prov |
+|---|---|---|---|
+| Basic suite, Opus | 5 | 0 | 0–3 false-alarm defect flags per report after the fixes |
+| Hard suite, Opus | 5 | 0 | same |
+| Both suites, Haiku, 2 seeds | 20 | 0 | not separately tallied |
+| Scaled environment fault | 6 | 1 agent didn't notice (and still excluded the point) | 6/6 detected |
+| Consistent substitution | 6 | **2 agents didn't notice** | **6/6 detected, including both misses** |
+
+What this establishes:
+1. Data-visible traps are handled by current models, Opus 5.5 and Haiku 5.5 alike (30/30).
+2. Failures outside the agent's view (inputs changed by something else) are caught by HEP-Prov in every case (12/12), including two the agent missed and two consistent substitutions with no data signature.
+3. On careful runs the residual cost is a few false-alarm flags per report. These come from prose arithmetic beyond the grammar and from values computed but never printed. The planted-defect calibration is unchanged after every fix (27/27, 0/20).
+
+Limits: one task family (light-yield, calorimeter, efficiency, peak fits), single seeds per condition, and environment faults injected by the harness rather than arising from a real concurrent system.

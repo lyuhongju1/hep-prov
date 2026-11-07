@@ -4,7 +4,9 @@ Provenance recorder and verifier for AI agents doing physics. **Status:**
 - Milestone 0 (recorder and read attestation): done.
 - Milestone 1 (verifier): core done. On the archived GRACE corpus it rediscovers the artifact audit's DarkSide findings without supervision.
 - Milestone 2 (fault-injection calibration on a reference pipeline): done. 27/27 injected defects detected, 0/20 clean runs flagged. In-sample; see [docs/CALIBRATION.md](docs/CALIBRATION.md).
-- External tests: the HZZ agent corpus ([docs/EXTERNAL_HZZ.md](docs/EXTERNAL_HZZ.md)), and five live LLM-agent runs under the recorder ([docs/LIVE_AGENT_PILOT.md](docs/LIVE_AGENT_PILOT.md)). No natural defects yet, so these measure false alarms.
+- External tests: the HZZ agent corpus ([docs/EXTERNAL_HZZ.md](docs/EXTERNAL_HZZ.md)), and 41 live LLM-agent runs under the recorder (Opus 5.5 and Haiku 5.5, [docs/LIVE_AGENT_PILOT.md](docs/LIVE_AGENT_PILOT.md)):
+  - The agents handled all 30 data-visible traps themselves.
+  - HEP-Prov detected 12 of 12 mid-run input changes, including 2 statistically identical swaps that the agent missed.
 
 Design: [DESIGN.md](DESIGN.md).
 
