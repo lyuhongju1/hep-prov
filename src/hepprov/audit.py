@@ -69,6 +69,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
                 sev = "info"   # fixed later, or the agent "ran" a non-script (e.g. a CSV)
         elif f["kind"] == "overwrite" and str(f.get("path", "")).lower().endswith(CODE_SUFFIXES):
             sev = "info"
+        elif f["kind"] == "stale_claim" and f.get("marked_earlier"):
+            sev = "info"     # "previously 0.91, now 0.67": an earlier value presented as such
         elif f["kind"] == "superseded_output" and not f.get("read_afterwards"):
             sev = "info"     # stale output nobody read again
         elif f["kind"] == "unexplained_claim" and f.get("approximate"):
@@ -76,6 +78,22 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
         elif f["kind"] == "claim_from_tainted_input" and f.get("disclosed"):
             sev = "info"     # the report says which flagged input the number comes from
         f.setdefault("severity", sev)
+
+
+_EARLIER_WORDS = ("previous", "before the", "originally", "original ", "earlier", "old ", "first version",
+                  "initial", "was ", "were ", "used to", "superseded", "replaced")
+
+
+def _stale_of(key: str, stale: dict[str, str], producer: dict[str, str]) -> str | None:
+    """Reason a support key comes from a superseded step, or None."""
+    key = re.sub(r"^(?:x|/)(?:100|1000):", "", key)
+    tier, _, rest = key.partition(":")
+    if tier == "stdout":
+        return stale.get(rest.rpartition(":")[0])
+    if tier in ("json", "table"):
+        lab = producer.get(rest.split(":", 1)[0])
+        return stale.get(lab) if lab else None
+    return None
 
 
 def _flag(detector: str, kind: str, detail: str, **kw) -> dict[str, Any]:
@@ -188,6 +206,15 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             flags.append(_flag("static", "transcribed_literal", f"{s['literal']} = {s['equals']}",
                                step=label, line=s["line"], path=script.name))
 
+    # steps whose results a later revision superseded, and who last wrote each file
+    from hepprov.superseded import stale_steps
+    stale = stale_steps(m)
+    producer: dict[str, str] = {}
+    for ev in m.events():
+        if ev["kind"] == "exec":
+            for rel in ev["data"].get("writes", {}):
+                producer[Path(rel).name] = ev["data"].get("label") or f"exec#{ev['seq']}"
+
     # evidence-based verification of the report (attested evidence only)
     pool = pool_from_files(attested_files(m))
     pool.add(emitted_values(m))
@@ -236,6 +263,17 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                                        f"{v['text']} rests only on {v['support'][0]} ({whys[0]})"
                                        + ("; its sentence names the flagged file (disclosed)" if disclosed else ""),
                                        claim=v["id"], disclosed=disclosed))
+            # stale claims: the number comes only from results that a later revision superseded
+            if v["verdict"] in ("verified", "copy") and v["support"] and stale:
+                reasons = [_stale_of(k, stale, producer) for k in v["support"]]
+                if all(reasons):
+                    before = report_text[max(0, v.get("pos", 0) - 140):v.get("pos", 0)].lower()
+                    marked = any(w in before for w in _EARLIER_WORDS)
+                    flags.append(_flag("verify", "stale_claim",
+                                       f"{v['text']} rests only on {v['support'][0]}, from a step whose results were "
+                                       f"superseded ({reasons[0]})"
+                                       + ("; the report marks it as an earlier value" if marked else ""),
+                                       claim=v["id"], marked_earlier=marked))
         for scope in (ver, ver.get("intermediates") or {}):
             for v in scope.get("verdicts", []):
                 if v["verdict"] == "diagnosed" and all("+[1.0]" in f for f in v["support"]):

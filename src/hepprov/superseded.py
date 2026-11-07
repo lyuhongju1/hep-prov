@@ -65,3 +65,50 @@ def superseded_outputs(m: Manifest) -> list[dict[str, Any]]:
         out.append({"path": rel, "script": script, "produced_by": label, "produced_at_seq": seq,
                     "script_rerun_at_seq": first_new, "read_afterwards_by": stale_reads[:5]})
     return out
+
+
+def stale_steps(m: Manifest) -> dict[str, str]:
+    """Steps whose results no longer reflect the run's current state: label -> reason.
+
+    A step is stale if (a) its script was rewritten and re-run later at the
+    new version, or (b) a file it read was rewritten later (by any step, a
+    declared data update included) and the same invocation was not re-run
+    after that. Results printed or written by a stale step are what a
+    revised report must not keep presenting as current.
+    """
+    execs = []                       # (seq, label, invocation, script, script_sha, reads)
+    writes: list[tuple[int, str, str]] = []   # (seq, path, sha)
+    script_sha: dict[str, str] = {}
+    for ev in m.events():
+        kind, d, seq = ev["kind"], ev["data"], ev["seq"]
+        if kind == "declare" and not d.get("external"):
+            script_sha.setdefault(d["path"], d["sha256"])
+        elif kind == "untracked_change":
+            for rel, sha in d.get("changed", {}).items():
+                if sha:
+                    writes.append((seq, rel, sha))
+                    script_sha[rel] = sha
+        elif kind == "exec":
+            label = d.get("label") or f"exec#{seq}"
+            inv = tuple(d.get("cmd", [])[1:])
+            script = next((a for a in inv if a.endswith(".py")), None)
+            reads = [(r["path"], r.get("sha256")) for r in d.get("reads", [])]
+            execs.append((seq, label, inv, script, script_sha.get(script) if script else None, reads))
+            for rel, sha in d.get("writes", {}).items():
+                if sha:
+                    writes.append((seq, rel, sha))
+                    script_sha[rel] = sha
+    out: dict[str, str] = {}
+    for seq, label, inv, script, ssha, reads in execs:
+        if not script:
+            continue
+        later = [e for e in execs if e[0] > seq]
+        if ssha and any(e[3] == script and e[4] and e[4] != ssha for e in later):
+            out[label] = f"{script} was changed and re-run later"
+            continue
+        for path, rsha in reads:
+            upd = [s for s, p, h in writes if p == path and s > seq and h != rsha]
+            if upd and not any(e[2] == inv and e[0] > upd[0] for e in later):
+                out[label] = f"input {path} was replaced later (step {upd[0]}) and this step was not re-run"
+                break
+    return out

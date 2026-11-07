@@ -22,6 +22,7 @@ class Task:
     declared: list[str]
     truth: dict
     traps: list[str] = field(default_factory=list)
+    followups: list = field(default_factory=list)   # [(message, action or None)], sent after the agent finishes
 
 
 def _write_events(path: Path, values, header: str = "event,npe") -> None:

@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))  # hepprov 
 from tasks import TASKS, build, save_truth  # noqa: E402
 from tasks_hard import TASKS_HARD  # noqa: E402
 from tasks_long import TASKS_LONG  # noqa: E402
+from tasks_revision import TASKS_REVISION  # noqa: E402
 
 from hepprov.recorder import Recorder  # noqa: E402
 
@@ -159,6 +160,8 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
     messages = [{"role": "user", "content": task.prompt}]
     cost, turns, outcome = 0.0, 0, "unknown"
     fault = FAULTS.get(task.id) if ENV_FAULT else None
+    pending = list(getattr(task, "followups", []) or [])
+    followups_sent = 0
     fault_applied = None
     t0 = time.time()
     while True:
@@ -202,6 +205,14 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
             continue
         uses = [b for b in resp.content if b.type == "tool_use"]
         if not uses:
+            if pending:                       # the requester revises the analysis
+                msg, action = pending.pop(0)
+                if action is not None:
+                    action(rec)               # a declared, recorded data update, not a fault
+                log.write(json.dumps({"turn": turns, "followup": msg}) + "\n")
+                messages.append({"role": "user", "content": msg})
+                followups_sent += 1
+                continue
             outcome = "finished" if (root / "report.md").exists() else "stopped_without_report"
             break
         results = []
@@ -230,7 +241,8 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
     meta = {"task": task.id, "seed": seed, "model": MODEL, "effort": EFFORT, "thinking": THINKING,
             "betas": BETAS, "fallbacks": FALLBACKS, "max_tokens": MAX_TOKENS, "caps": {"turns": MAX_TURNS,
             "cost_usd": MAX_COST_USD}, "turns": turns, "cost_usd_estimate": round(cost, 3),
-            "outcome": outcome, "wall_s": round(time.time() - t0, 1), "env_fault": fault_applied}
+            "outcome": outcome, "wall_s": round(time.time() - t0, 1), "env_fault": fault_applied,
+            "followups_sent": followups_sent}
     (tdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
 
@@ -240,7 +252,7 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--tasks", nargs="*", help="task id prefixes, e.g. T1 T3 (default: all)")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--suite", choices=["basic", "hard", "all", "long"], default="basic")
+    ap.add_argument("--suite", choices=["basic", "hard", "all", "long", "revision"], default="basic")
     ap.add_argument("--model", choices=sorted(MODELS), default="claude-opus-5-5")
     ap.add_argument("--env-fault", choices=["scaled", "consistent"], default=None,
                     help="inject an environment fault (see FAULTS)")
@@ -252,9 +264,9 @@ def main() -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     client = anthropic.Anthropic()
-    pool = {"basic": TASKS, "hard": TASKS_HARD, "all": TASKS + TASKS_HARD, "long": TASKS_LONG}[a.suite]
+    pool = {"basic": TASKS, "hard": TASKS_HARD, "all": TASKS + TASKS_HARD, "long": TASKS_LONG, "revision": TASKS_REVISION}[a.suite]
     global MAX_TURNS, MAX_COST_USD
-    if a.suite == "long":   # long open-ended tasks get more room
+    if a.suite in ("long", "revision"):   # long open-ended and revision tasks get more room
         MAX_TURNS, MAX_COST_USD = 60, 5.00
     sel = [t for t in pool if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
     total = 0.0
