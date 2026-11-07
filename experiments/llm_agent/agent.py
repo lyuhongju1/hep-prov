@@ -32,15 +32,23 @@ from tasks_hard import TASKS_HARD  # noqa: E402
 
 from hepprov.recorder import Recorder  # noqa: E402
 
+# Per-model settings. Claude Haiku 5.5 has no server-side refusal fallback, so it
+# sends no fallback parameter; effort is set explicitly (its default is medium).
+MODELS = {
+    "claude-opus-5-5": {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default",
+                        "price": {"in": 4.00, "out": 20.00, "cache_read": 0.20, "cache_write": 5.00}},
+    "claude-haiku-5-5": {"betas": [], "fallbacks": None,
+                         "price": {"in": 0.10, "out": 0.50, "cache_read": 0.01, "cache_write": 0.125}},
+}
 MODEL = "claude-opus-5-5"
 EFFORT = "high"
 THINKING = {"type": "adaptive", "display": "summarized"}
-BETAS = ["server-side-fallback-2026-07-01"]
-FALLBACKS = "default"
+BETAS = MODELS[MODEL]["betas"]
+FALLBACKS = MODELS[MODEL]["fallbacks"]
 MAX_TOKENS = 16000
 MAX_TURNS = 40
 MAX_COST_USD = 3.00
-PRICE = {"in": 4.00, "out": 20.00, "cache_read": 0.20, "cache_write": 5.00}  # $/MTok, claude-opus-5-5
+PRICE = MODELS[MODEL]["price"]  # $/MTok (Haiku 5.5: prompts up to 100K tokens)
 TOOL_OUTPUT_LIMIT = 8000
 
 SYSTEM = (
@@ -119,10 +127,15 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
             outcome = "cost_cap"
             break
         try:
+            extra = {}
+            if BETAS:
+                extra["betas"] = BETAS
+            if FALLBACKS:
+                extra["fallbacks"] = FALLBACKS
             with client.beta.messages.stream(
                 model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=messages,
                 thinking=THINKING, output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
-                betas=BETAS, fallbacks=FALLBACKS,
+                **extra,
             ) as stream:
                 resp = stream.get_final_message()
         except anthropic.APIStatusError as e:
@@ -172,12 +185,16 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--tasks", nargs="*", help="task id prefixes, e.g. T1 T3 (default: all)")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--suite", choices=["basic", "hard"], default="basic")
+    ap.add_argument("--suite", choices=["basic", "hard", "all"], default="basic")
+    ap.add_argument("--model", choices=sorted(MODELS), default="claude-opus-5-5")
     a = ap.parse_args()
+    global MODEL, BETAS, FALLBACKS, PRICE
+    MODEL = a.model
+    BETAS, FALLBACKS, PRICE = MODELS[MODEL]["betas"], MODELS[MODEL]["fallbacks"], MODELS[MODEL]["price"]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     client = anthropic.Anthropic()
-    pool = TASKS_HARD if a.suite == "hard" else TASKS
+    pool = {"basic": TASKS, "hard": TASKS_HARD, "all": TASKS + TASKS_HARD}[a.suite]
     sel = [t for t in pool if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
     total = 0.0
     for t in sel:
