@@ -57,3 +57,48 @@ def test_number_from_a_step_whose_input_was_updated_is_stale(tmp_path):
     rec.write_file("report.md", "Efficiency 0.39.\n")              # never re-ran on the new data
     stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
     assert stale and "replaced later" in stale[0]["detail"]
+
+
+def test_regeneration_keeps_changed_numbers_and_drops_unchanged_ones(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "data.csv").write_text(DATA)
+    rec = Recorder(root)
+    rec.init(declare=["data.csv"])
+    rec.write_file("ana.py", "xs = [float(v) for v in open('data.csv').read().split()[1:]]\n"
+                             "print('events', len(xs) * 3 + 1137)\n"
+                             "print('efficiency', round(sum(x > 0.6 for x in xs) / len(xs), 4))\n")
+    rec.exec([PY, "ana.py"], label="ana", echo=False)              # events 2337, efficiency 0.39
+    rec.write_file("data.csv", "x\n" + "0.95\n" * 100 + "0.10\n" * 300, label="data update")
+    rec.write_file("report.md", "We processed 2337 events. Efficiency 0.39.\n")
+    res = audit_run(root, root / "report.md", counterfactual=True)
+    stale = {f["detail"].split()[0]: f for f in res["flags"] if f["kind"] == "stale_claim"}
+    assert "2337" not in stale                                     # same under regeneration
+    assert stale["0.39"]["regenerated"] == "changed"
+
+
+def test_disclosure_paragraph_marks_earlier_values(tmp_path):
+    root, rec = _setup(tmp_path)
+    rec.write_file("report.md", "Efficiency 0.19.\n\nIn my first inspection the efficiency came out as 0.39, "
+                                "with the old selection; this was superseded.\n")
+    stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
+    assert stale and all(f["severity"] == "info" for f in stale)
+
+
+def test_presentational_revision_is_info(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "data.csv").write_text(DATA)
+    rec = Recorder(root)
+    rec.init(declare=["data.csv"])
+    body = ("xs = [float(v) for v in open('data.csv').read().split()[1:]]\n"
+            "m = sum(xs) / len(xs)\n"
+            "print('mean', round(m, 6), 'sum', round(sum(xs), 3), 'n', len(xs) * 7 + 1001)\n")
+    rec.write_file("ana.py", body + "print('extra', round(m * 3.1416, 6))\n")
+    rec.exec([PY, "ana.py"], label="ana v1", echo=False)
+    rec.write_file("ana.py", body)                                 # dropped one column, same computation
+    rec.exec([PY, "ana.py"], label="ana v2", echo=False)
+    extra = f"{round(sum((i * 37) % 100 / 100 for i in range(400)) / 400 * 3.1416, 6)}"
+    rec.write_file("report.md", f"The scaled mean is {extra}.\n")
+    stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
+    assert stale and all(f["presentational"] and f["severity"] == "info" for f in stale)

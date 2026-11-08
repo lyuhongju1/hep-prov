@@ -186,3 +186,19 @@ Remaining defect flags, all false alarms: arithmetic with small numbers in prose
 - **Uncertainty-aware prose arithmetic.** From the report's "x ± s" pairs: inverse-variance weighted means and their errors, combined errors and pulls, roots and powers. Full-precision values are used when the inputs are supported. Accepted only at exact digits with a chance rate of 5% or less. Effect: T3's weighted average 21.99 and T4's fourth root 0.970 are explained. The planted fabrications stay flagged.
 - **Superseded-output detector** (`superseded.py`). An output written by an older version of a script that was later changed and re-run, and that wasn't regenerated. Defect if a later step reads it, info otherwise. Calibrated as defect class D10.
 - **Overwrite rule.** The same invocation (script and arguments) regenerating its own output is a regeneration, not an overwrite. The same script with different arguments writing one file is still a collision (D6, GRACE's merged-file bug). Overwrites of documents the agent writes itself (`report.md`) are info.
+
+## Consistent substitution at scale: seeds 4–9 (30 runs, about $2.40)
+
+The same protocol as above (`--env-fault consistent`, tasks T1, T3, T6), repeated with Haiku 5.5 on seeds 5–9 and Opus 5.5 on seeds 5–7. Combined with seed 4 there are 18 Haiku runs and 12 Opus runs. Every run finished within its caps. Adjudication method:
+- **Agent noticed:** the report says that the swapped file changed during the session, by any wording. Each report was read; a generic "changed"/"differs" with no reference to the file does not count.
+- **HEP-Prov detected:** a `written_outside_recorder` flag on the swapped path.
+
+| | Agent noticed (95% Wilson CI) | HEP-Prov detected |
+|---|---|---|
+| Haiku 5.5 (18 runs) | 5/18 = 28% [12, 51] | 18/18 |
+| Opus 5.5 (12 runs) | 11/12 = 92% [65, 99] | 12/12 |
+| All agents (30 runs) | 16/30 = 53% [36, 70] | **30/30 = 100% [89, 100]** |
+
+Per run, Haiku noticed: s4 T3; s5 T1, T3; s8 T1, T3. It never noticed in T6 (0/6), where the analysis reads the swapped file once early and once in the fit. Opus missed only s6 T6.
+
+How agents notice: the swap can only be detected by comparing raw content across two reads, i.e. first rows, min/max or a checksum. Opus prints such fingerprints in its first inspection almost every time; Haiku does it sometimes. When an agent noticed, it always used the version on disk at the end, and Opus usually quoted the result with the earlier version as a sensitivity check. The substitution leaves the physics unchanged, so no final result was wrong. What is missing in the unnoticed runs is the record: the report presents numbers from a file whose content changed partway through, with nothing to show it. HEP-Prov's hashes show it in every case, with no dependence on the agent's habits.

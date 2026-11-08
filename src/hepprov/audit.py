@@ -71,6 +71,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
             sev = "info"
         elif f["kind"] == "stale_claim" and f.get("marked_earlier"):
             sev = "info"     # "previously 0.91, now 0.67": an earlier value presented as such
+        elif f["kind"] == "stale_claim" and f.get("presentational"):
+            sev = "info"     # the revised script reproduces what it still prints: a layout change
         elif f["kind"] == "superseded_output" and not f.get("read_afterwards"):
             sev = "info"     # stale output nobody read again
         elif f["kind"] == "unexplained_claim" and f.get("approximate"):
@@ -93,6 +95,90 @@ def _stale_of(key: str, stale: dict[str, str], producer: dict[str, str]) -> str 
     if tier in ("json", "table"):
         lab = producer.get(rest.split(":", 1)[0])
         return stale.get(lab) if lab else None
+    return None
+
+
+_DISCLOSURE_PHRASES = ("first inspection", "first read", "first look", "first pass", "earlier version",
+                       "previous version", "original version", "older version", "before the change",
+                       "before it changed", "was modified", "was rewritten", "was replaced", "changed during",
+                       "mid-run", "changed between")
+
+
+def _paragraph(text: str, pos: int) -> str:
+    start = text.rfind("\n\n", 0, pos)
+    end = text.find("\n\n", pos)
+    return text[start + 1 if start >= 0 else 0:end if end >= 0 else len(text)]
+
+
+def _regen_status(key: str, stale: dict[str, str], regen_of: dict) -> str:
+    """'changed' / 'unchanged' / 'inconclusive' / 'not_run' for a stale stdout support key."""
+    key = re.sub(r"^(?:x|/)(?:100|1000):", "", key)
+    tier, _, rest = key.partition(":")
+    if tier != "stdout":
+        return "not_run"
+    label, _, idx = rest.rpartition(":")
+    rg = regen_of.get(label)
+    if rg is None:
+        return "not_run"
+    if rg.status != "ok" or not idx.isdigit() or int(idx) in rg.nondeterministic:
+        return "inconclusive"
+    return "changed" if int(idx) in rg.dependent else "unchanged"
+
+
+_SIGNUM = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
+
+
+def _sig_numbers(text: str) -> list[str]:
+    """Printed numbers with at least 3 significant digits, normalized (trailing zeros dropped)."""
+    out = []
+    for t in _SIGNUM.findall(text):
+        mant = re.split(r"[eE]", t)[0].lstrip("+-")
+        if len(mant.replace(".", "").lstrip("0")) >= 3:
+            try:
+                out.append(repr(float(t)))
+            except ValueError:
+                pass
+    return out
+
+
+def _presentational_revisions(root: Path, m: Manifest, stale: dict[str, str]) -> set[str]:
+    """Steps superseded by a script revision that left the computation unchanged.
+
+    Compares the step's printed numbers with those of the script's LAST run:
+    if at least 80% of the latter (3+ significant digits) already appeared in
+    the old output, the revision added or dropped columns but did not change
+    what it computes.
+    """
+    runs: dict[str, list[tuple[int, str]]] = {}
+    for ev in m.events():
+        if ev["kind"] == "exec":
+            d = ev["data"]
+            script = next((a for a in d.get("cmd", [])[1:] if a.endswith(".py")), None)
+            if script:
+                runs.setdefault(script, []).append((ev["seq"], d.get("label") or f"exec#{ev['seq']}"))
+
+    def nums(seq: int) -> list[str] | None:
+        log = root / ".hepprov" / "logs" / f"{seq:06d}" / "stdout.bin"
+        return _sig_numbers(log.read_bytes().decode("utf-8", "replace")) if log.exists() else None
+
+    out = set()
+    for script, rs in runs.items():
+        for seq, label in rs:
+            if "was changed and re-run" not in stale.get(label, ""):
+                continue
+            old, new = nums(seq), nums(rs[-1][0])
+            if old and new and sum(x in set(old) for x in new) >= 0.8 * len(new):
+                out.add(label)
+    return out
+
+
+def _label_of(key: str, producer: dict[str, str]) -> str | None:
+    key = re.sub(r"^(?:x|/)(?:100|1000):", "", key)
+    tier, _, rest = key.partition(":")
+    if tier == "stdout":
+        return rest.rpartition(":")[0]
+    if tier in ("json", "table"):
+        return producer.get(rest.split(":", 1)[0])
     return None
 
 
@@ -209,11 +295,27 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
     # steps whose results a later revision superseded, and who last wrote each file
     from hepprov.superseded import stale_steps
     stale = stale_steps(m)
+    presentational = _presentational_revisions(root, m, stale)
     producer: dict[str, str] = {}
     for ev in m.events():
         if ev["kind"] == "exec":
             for rel in ev["data"].get("writes", {}):
                 producer[Path(rel).name] = ev["data"].get("label") or f"exec#{ev['seq']}"
+
+    regen_of: dict = {}
+    if counterfactual and stale:
+        from hepprov.counterfactual import regenerate_step
+        for ev in m.events():
+            if ev["kind"] != "exec":
+                continue
+            d = ev["data"]
+            label = d.get("label") or f"exec#{ev['seq']}"
+            if label not in stale:
+                continue
+            script = next((a for a in d.get("cmd", [])[1:] if a.endswith(".py")), None)
+            log = root / ".hepprov" / "logs" / f"{ev['seq']:06d}" / "stdout.bin"
+            if script and log.exists() and (root / script).exists():
+                regen_of[label] = regenerate_step(root, script, log.read_bytes().decode("utf-8", "replace"), label)
 
     # evidence-based verification of the report (attested evidence only)
     pool = pool_from_files(attested_files(m))
@@ -266,14 +368,25 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             # stale claims: the number comes only from results that a later revision superseded
             if v["verdict"] in ("verified", "copy") and v["support"] and stale:
                 reasons = [_stale_of(k, stale, producer) for k in v["support"]]
-                if all(reasons):
-                    before = report_text[max(0, v.get("pos", 0) - 140):v.get("pos", 0)].lower()
-                    marked = any(w in before for w in _EARLIER_WORDS)
+                regen = [_regen_status(k, stale, regen_of) for k in v["support"]]
+                weak_conv = v["sig"] < 3 and all(re.match(r"(?:x|/)(?:100|1000):", k) for k in v["support"])
+                if all(reasons) and "unchanged" not in regen and not weak_conv:
+                    pos = v.get("pos", 0)
+                    before = report_text[max(0, pos - 140):pos].lower().replace("-", " ")
+                    para = _paragraph(report_text, pos).lower().replace("-", " ")
+                    marked = (any(w in before for w in _EARLIER_WORDS)
+                              or any(w in para for w in _DISCLOSURE_PHRASES))
+                    note = {"changed": "; regenerating the step on the current files changes this number",
+                            "inconclusive": "; regeneration inconclusive"}.get(regen[0], "")
+                    pres = all(_label_of(k, producer) in presentational for k in v["support"])
                     flags.append(_flag("verify", "stale_claim",
                                        f"{v['text']} rests only on {v['support'][0]}, from a step whose results were "
-                                       f"superseded ({reasons[0]})"
-                                       + ("; the report marks it as an earlier value" if marked else ""),
-                                       claim=v["id"], marked_earlier=marked))
+                                       f"superseded ({reasons[0]}){note}"
+                                       + ("; the report marks it as an earlier value" if marked else "")
+                                       + ("; the revised script reproduces the values it still prints"
+                                          if pres else ""),
+                                       claim=v["id"], marked_earlier=marked, regenerated=regen[0],
+                                       presentational=pres))
         for scope in (ver, ver.get("intermediates") or {}):
             for v in scope.get("verdicts", []):
                 if v["verdict"] == "diagnosed" and all("+[1.0]" in f for f in v["support"]):

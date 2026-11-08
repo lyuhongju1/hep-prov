@@ -139,3 +139,35 @@ def rerun_step(root: Path, script_rel: str, recorded_stdout: str, flagged: list[
     nondet = {i for i, (x, y) in enumerate(zip(rec, a)) if x != y}
     dep = {i for i, (x, y) in enumerate(zip(a, b)) if x != y} - nondet
     return StepCounterfactual(label, "ok", dependent=dep, nondeterministic=nondet, n_values=len(rec))
+
+
+def regenerate_step(root: Path, script_rel: str, recorded_stdout: str, label: str,
+                    timeout: int = 120) -> StepCounterfactual:
+    """Re-run a superseded step on the run's CURRENT files (twice) and compare its printed numbers.
+
+    `dependent` holds positions whose value changes under regeneration (the
+    recorded number is genuinely out of date); `nondeterministic` holds
+    positions where the two regenerations disagree with each other.
+    """
+    rec = _numbers(recorded_stdout)
+    with tempfile.TemporaryDirectory(prefix="hepprov_rg_") as td:
+        ignore = shutil.ignore_patterns(".hepprov", "__pycache__")
+        outs = []
+        for name in ("A", "B"):
+            d = Path(td) / name
+            shutil.copytree(root, d, ignore=ignore)
+            try:
+                code, out, err = _run(script_rel, d, timeout)
+            except subprocess.TimeoutExpired:
+                return StepCounterfactual(label, "inconclusive", "regeneration timed out")
+            if code != 0:
+                tail = err.strip().splitlines()[-1:] or [""]
+                return StepCounterfactual(label, "inconclusive", f"regeneration exit code {code}: {tail[0][:200]}")
+            outs.append(_numbers(out))
+    a, b = outs
+    if not (len(rec) == len(a) == len(b)):
+        return StepCounterfactual(label, "inconclusive",
+                                  f"printed value counts differ (recorded {len(rec)}, regenerated {len(a)}/{len(b)})")
+    nondet = {i for i, (x, y) in enumerate(zip(a, b)) if x != y}
+    changed = {i for i, (x, y) in enumerate(zip(rec, a)) if x != y} - nondet
+    return StepCounterfactual(label, "ok", dependent=changed, nondeterministic=nondet, n_values=len(rec))
