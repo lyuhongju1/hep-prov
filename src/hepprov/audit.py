@@ -56,11 +56,13 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
     its code), and an overwrite of a code file (the agent editing its own
     scripts). Overwrites of data files stay defects.
     """
-    ok_scripts = set()
+    ok_scripts, authoring = set(), set()
     for ev in m.events():
         d = ev["data"]
         if ev["kind"] == "exec" and d.get("exit_code") == 0:
             ok_scripts.update(x for x in d.get("cmd", [])[1:] if x.endswith(".py"))
+        if ev["kind"] == "exec" and (d.get("cmd") or [""])[0] == "<write_file>":
+            authoring.add(d.get("label") or f"exec#{ev['seq']}")
     for f in flags:
         sev = "defect"
         if f["kind"] == "failed_step":
@@ -69,6 +71,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
                 sev = "info"   # fixed later, or the agent "ran" a non-script (e.g. a CSV)
         elif f["kind"] == "overwrite" and str(f.get("path", "")).lower().endswith(CODE_SUFFIXES):
             sev = "info"
+        elif f["kind"] == "overwrite" and f.get("by") and all(b in authoring for b in f["by"]):
+            sev = "info"     # an explicit, recorded write replaced the file (e.g. a declared data update)
         elif f["kind"] == "stale_claim" and f.get("marked_earlier"):
             sev = "info"     # "previously 0.91, now 0.67": an earlier value presented as such
         elif f["kind"] == "stale_claim" and f.get("presentational"):
@@ -204,7 +208,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                            v["detail"] + ("; the report names this file (disclosed)" if disclosed else ""),
                            path=v["path"], step=v["label"], disclosed=disclosed))
     for rel, steps in at["overwrites"].items():
-        flags.append(_flag("attest", "overwrite", " -> ".join(steps), path=rel))
+        flags.append(_flag("attest", "overwrite", " -> ".join(steps), path=rel, by=steps[1:]))
 
     # Taint propagation: a step that read a violating input, or a tainted file,
     # taints everything it wrote. Numbers supported only by tainted files are

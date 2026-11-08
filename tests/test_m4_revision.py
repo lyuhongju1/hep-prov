@@ -102,3 +102,24 @@ def test_presentational_revision_is_info(tmp_path):
     rec.write_file("report.md", f"The scaled mean is {extra}.\n")
     stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
     assert stale and all(f["presentational"] and f["severity"] == "info" for f in stale)
+
+
+def test_declared_data_update_is_info_but_script_overwrite_is_defect(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "data.csv").write_text(DATA)
+    rec = Recorder(root)
+    rec.init(declare=["data.csv"])
+    rec.write_file("data.csv", "x\n" + "0.95\n" * 100, label="data update")   # explicit, recorded
+    rec.write_file("gen.py", "open('data.csv', 'w').write('x' + chr(10) + '0.5' + chr(10))\n")
+    rec.exec([PY, "gen.py"], label="gen", echo=False)                        # a script clobbers it
+    ow = [f for f in audit_run(root)["flags"] if f["kind"] == "overwrite" and f["path"] == "data.csv"]
+    assert ow and ow[0]["severity"] == "defect"     # the script write is in the chain
+    root2 = tmp_path / "run2"
+    root2.mkdir()
+    (root2 / "data.csv").write_text(DATA)
+    rec2 = Recorder(root2)
+    rec2.init(declare=["data.csv"])
+    rec2.write_file("data.csv", "x\n" + "0.95\n" * 100, label="data update")
+    ow2 = [f for f in audit_run(root2)["flags"] if f["kind"] == "overwrite"]
+    assert all(f["severity"] == "info" for f in ow2)

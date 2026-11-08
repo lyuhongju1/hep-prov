@@ -202,3 +202,36 @@ The same protocol as above (`--env-fault consistent`, tasks T1, T3, T6), repeate
 Per run, Haiku noticed: s4 T3; s5 T1, T3; s8 T1, T3. It never noticed in T6 (0/6), where the analysis reads the swapped file once early and once in the fit. Opus missed only s6 T6.
 
 How agents notice: the swap can only be detected by comparing raw content across two reads, i.e. first rows, min/max or a checksum. Opus prints such fingerprints in its first inspection almost every time; Haiku does it sometimes. When an agent noticed, it always used the version on disk at the end, and Opus usually quoted the result with the earlier version as a sensitivity check. The substitution leaves the physics unchanged, so no final result was wrong. What is missing in the unnoticed runs is the record: the report presents numbers from a file whose content changed partway through, with nothing to show it. HEP-Prov's hashes show it in every case, with no dependence on the agent's habits.
+
+## Stale claims: numbers left over from a superseded step
+
+**Motivation.** When agents are asked for revisions ("tighten the cut and update the report"), they make a typical mistake: a number from before the change stays in the report. Every file is legitimately written by the run, so read attestation is silent. The manifest still shows the problem.
+
+**Detector** (`superseded.stale_steps` and the stale-claim check in `audit.py`). A step is *stale* if one of two things happened:
+- its script was rewritten and re-run at the new version;
+- a file it read was later rewritten with different content, and the same invocation was not re-run afterwards.
+
+A report number is a `stale_claim` if all its verifier support comes from stale steps. Three checks then decide its severity:
+1. **Regeneration** (with `counterfactual=True`). The stale step is re-run twice on the run's current files. A number that comes out the same is dropped. One that changes, with both re-runs agreeing, is confirmed out of date (`regenerated=changed`).
+2. **Disclosure.** It is `info` if the number is presented as an earlier value. The check looks for marker words in the 140 characters before it ("previously", "originally", ...), or a disclosure phrase anywhere in its paragraph ("first inspection", "earlier version", "changed during", ...).
+3. **Presentational revisions.** It is `info` if the script's last run reproduces at least 80% of its printed numbers (3+ significant figures) from the old run. In that case the revision added or dropped columns without changing the computation.
+
+Two-significant-figure matches that rest only on a unit or percent conversion are ignored, as chance.
+
+**Fault-injection tests** (`tests/test_m4_revision.py`, 6 tests):
+- an unmarked leftover number after a cut change is a defect;
+- "previously 0.39" is info;
+- a number from a step whose input was later updated is stale;
+- regeneration drops an unchanged count and confirms a changed efficiency;
+- a disclosure paragraph is info;
+- a column-dropping revision is info.
+
+**False-positive measurement on 71 live runs** (all earlier runs plus seeds 5–9):
+- **Runs with no mid-run change: 0 stale flags.** None of these runs revised a script in a way that changed a quoted number.
+- **Runs where the harness changed an input mid-run: 74 informational flags, 0 defects.** These are the agents' own disclosures, e.g. "In my first inspection the file had mean 7626.29 ...". For every one of them, regeneration confirms that the quoted number differs from the current file, so each is a true record of an earlier value.
+- **Before the three checks, the first version raised 29 defect-level stale flags on the 47 runs it was tried on.** Together with 9 found later on seed 8, they came from:
+  - disclosure wording outside the original marker list ("first inspection", "first-read");
+  - a column-dropping script revision (Haiku s8 T1, 9 flags);
+  - a two-digit uncertainty matched through ÷100.
+
+Measuring sensitivity needs runs where agents actually leave stale numbers in a revised report. That is the job of the revision suite.
