@@ -5,6 +5,7 @@ The manifest is replayed in order. A read is classified as one of:
   ok_declared              matches a declared input
   ok_latest                matches the latest version written by this run
                            (by an earlier command, or by the same command)
+  ok_intermediate          a version inside a step that also writes the file (in-place edit)
   stale_version            matches an older version this run wrote
   leftover_from_before_run file was in the root at init, undeclared, never rewritten
   written_outside_recorder content came from an untracked change between commands
@@ -21,7 +22,7 @@ from typing import Any
 
 from hepprov.manifest import Manifest
 
-OK = {"ok_declared", "ok_latest"}
+OK = {"ok_declared", "ok_latest", "ok_intermediate"}
 
 
 @dataclass
@@ -82,6 +83,10 @@ def attest(manifest: Manifest) -> dict[str, Any]:
                     v = ReadVerdict(seq, label, rel, sha, "leftover_from_before_run",
                                     "present when the run started, never declared or rewritten "
                                     "(likely output of an earlier run)")
+                elif rel in own:
+                    v = ReadVerdict(seq, label, rel, sha, "ok_intermediate",
+                                    "an intermediate version within a step that also writes this file "
+                                    "(e.g. an in-place edit read back before its final write)")
                 else:
                     v = ReadVerdict(seq, label, rel, sha, "not_written_by_run",
                                     "content matches no version this run wrote or declared")

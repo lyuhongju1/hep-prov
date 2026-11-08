@@ -12,8 +12,8 @@ DATA = "x\n" + "".join(f"{(i * 37) % 100 / 100:.2f}\n" for i in range(400))
 
 def _ana(cut):
     return ("xs = [float(v) for v in open('data.csv').read().split()[1:]]\n"
-            f"eff = sum(x > {cut} for x in xs) / len(xs)\n"
-            "print('efficiency', round(eff, 4))\n")
+            f"rate = sum(x > {cut} for x in xs) / 7\n"
+            "print('rate', round(rate, 4))\n")
 
 
 def _setup(tmp_path):
@@ -23,24 +23,24 @@ def _setup(tmp_path):
     rec = Recorder(root)
     rec.init(declare=["data.csv"])
     rec.write_file("ana.py", _ana(0.6))
-    rec.exec([PY, "ana.py"], label="ana v1", echo=False)          # efficiency 0.39
+    rec.exec([PY, "ana.py"], label="ana v1", echo=False)          # rate 22.2857
     rec.write_file("ana.py", _ana(0.8))                            # the requester changed the cut
-    rec.exec([PY, "ana.py"], label="ana v2", echo=False)          # efficiency 0.19
+    rec.exec([PY, "ana.py"], label="ana v2", echo=False)          # rate 10.8571
     return root, rec
 
 
 def test_unmarked_leftover_number_is_a_stale_claim(tmp_path):
     root, rec = _setup(tmp_path)
-    rec.write_file("report.md", "With the new cut the efficiency is 0.19. The summary table lists 0.39.\n")
+    rec.write_file("report.md", "With the new cut the rate is 10.8571. The summary table lists 22.2857.\n")
     res = audit_run(root, root / "report.md")
     stale = [f for f in res["flags"] if f["kind"] == "stale_claim"]
-    assert [f["detail"].split()[0] for f in stale] == ["0.39"]
+    assert [f["detail"].split()[0] for f in stale] == ["22.2857"]
     assert stale[0]["severity"] == "defect"
 
 
 def test_earlier_value_marked_as_such_is_info(tmp_path):
     root, rec = _setup(tmp_path)
-    rec.write_file("report.md", "The efficiency is now 0.19 (previously 0.39 with the old cut).\n")
+    rec.write_file("report.md", "The rate is now 10.8571 (previously 22.2857 with the old cut).\n")
     stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
     assert stale and all(f["severity"] == "info" for f in stale)
 
@@ -52,9 +52,9 @@ def test_number_from_a_step_whose_input_was_updated_is_stale(tmp_path):
     rec = Recorder(root)
     rec.init(declare=["data.csv"])
     rec.write_file("ana.py", _ana(0.6))
-    rec.exec([PY, "ana.py"], label="ana", echo=False)              # 0.39 on the old data
+    rec.exec([PY, "ana.py"], label="ana", echo=False)              # 22.2857 on the old data
     rec.write_file("data.csv", "x\n" + "0.95\n" * 100 + "0.10\n" * 300, label="data update")
-    rec.write_file("report.md", "Efficiency 0.39.\n")              # never re-ran on the new data
+    rec.write_file("report.md", "Rate 22.2857.\n")            # never re-ran on the new data
     stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
     assert stale and "replaced later" in stale[0]["detail"]
 
@@ -79,7 +79,7 @@ def test_regeneration_keeps_changed_numbers_and_drops_unchanged_ones(tmp_path):
 
 def test_disclosure_paragraph_marks_earlier_values(tmp_path):
     root, rec = _setup(tmp_path)
-    rec.write_file("report.md", "Efficiency 0.19.\n\nIn my first inspection the efficiency came out as 0.39, "
+    rec.write_file("report.md", "Rate 10.8571.\n\nIn my first inspection the rate came out as 22.2857, "
                                 "with the old selection; this was superseded.\n")
     stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
     assert stale and all(f["severity"] == "info" for f in stale)

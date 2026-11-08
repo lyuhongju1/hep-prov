@@ -81,6 +81,10 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
             sev = "info"     # stale output nobody read again
         elif f["kind"] == "unexplained_claim" and f.get("approximate"):
             sev = "info"     # "about 360-430", "p ~ 0.97": not a precise claim
+        elif f["kind"] == "leftover_from_before_run" and f.get("disclosed"):
+            sev = "info"     # the agent opened a leftover file and the report names it (inspected and set aside)
+        elif f["kind"] == "stale_claim" and f.get("low_precision"):
+            sev = "info"     # 1-2 significant figures: an exact match to an old printout is chance-level
         elif f["kind"] == "claim_from_tainted_input" and f.get("disclosed"):
             sev = "info"     # the report says which flagged input the number comes from
         f.setdefault("severity", sev)
@@ -105,7 +109,8 @@ def _stale_of(key: str, stale: dict[str, str], producer: dict[str, str]) -> str 
 _DISCLOSURE_PHRASES = ("first inspection", "first read", "first look", "first pass", "earlier version",
                        "previous version", "original version", "older version", "before the change",
                        "before it changed", "was modified", "was rewritten", "was replaced", "changed during",
-                       "mid-run", "changed between")
+                       "mid-run", "changed between", "rev 1", "revision 1", "first revision", "old selection",
+                       "old cut", "before the revision", "before revision", "superseded")
 
 
 def _paragraph(text: str, pos: int) -> str:
@@ -184,6 +189,40 @@ def _label_of(key: str, producer: dict[str, str]) -> str | None:
     if tier in ("json", "table"):
         return producer.get(rest.split(":", 1)[0])
     return None
+
+
+_TEXT_SUFFIXES = (".md", ".txt", ".csv", ".tsv", ".json", ".dat", ".log", ".tex", ".rst")
+_ARCHIVE = re.compile(r"(?i)(?:^|[\/_.-])(?:v\d+|old|archive\w*|supersed\w*|prev\w*|backup|bak|rev\d+)(?:$|[\/_.-])")
+
+
+def _current_text(root: Path, files: list[Path], report, stale: dict[str, str],
+                  producer: dict[str, str]) -> str:
+    """Text of the run's current, attested files, minus the report, archives, and outputs of stale steps.
+
+    A report number found here is part of the run's current state, even if
+    the verifier's parsers do not read the file (e.g. a markdown table).
+    """
+    rep = Path(report).resolve() if report else None
+    parts = []
+    for p in files:
+        try:
+            rel = p.relative_to(root).as_posix()
+        except ValueError:
+            rel = p.name
+        if (p.suffix.lower() not in _TEXT_SUFFIXES or (rep and p.resolve() == rep) or _ARCHIVE.search(rel)
+                or p.name not in producer or stale.get(producer[p.name], "")):
+            continue
+        try:
+            if p.stat().st_size <= 2_000_000:
+                parts.append(p.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            pass
+    return "\n".join(parts)
+
+
+def _in_text(num: str, text: str) -> bool:
+    num = num.strip().lstrip("+")
+    return bool(num) and re.search(r"(?<![\d.])" + re.escape(num) + r"(?![\d])", text) is not None
 
 
 def _flag(detector: str, kind: str, detail: str, **kw) -> dict[str, Any]:
@@ -322,7 +361,9 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                 regen_of[label] = regenerate_step(root, script, log.read_bytes().decode("utf-8", "replace"), label)
 
     # evidence-based verification of the report (attested evidence only)
-    pool = pool_from_files(attested_files(m))
+    current_files = attested_files(m)
+    pool = pool_from_files(current_files)
+    current_text = _current_text(root, current_files, report, stale, producer)
     pool.add(emitted_values(m))
     pool.add(stdout_values(m))
     pool.add(code_literals(m))
@@ -374,7 +415,8 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                 reasons = [_stale_of(k, stale, producer) for k in v["support"]]
                 regen = [_regen_status(k, stale, regen_of) for k in v["support"]]
                 weak_conv = v["sig"] < 3 and all(re.match(r"(?:x|/)(?:100|1000):", k) for k in v["support"])
-                if all(reasons) and "unchanged" not in regen and not weak_conv:
+                in_current = _in_text(v["text"], current_text)
+                if all(reasons) and "unchanged" not in regen and not weak_conv and not in_current:
                     pos = v.get("pos", 0)
                     before = report_text[max(0, pos - 140):pos].lower().replace("-", " ")
                     para = _paragraph(report_text, pos).lower().replace("-", " ")
@@ -390,6 +432,7 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
                                        + ("; the revised script reproduces the values it still prints"
                                           if pres else ""),
                                        claim=v["id"], marked_earlier=marked, regenerated=regen[0],
+                                       low_precision=v["sig"] < 3,
                                        presentational=pres))
         for scope in (ver, ver.get("intermediates") or {}):
             for v in scope.get("verdicts", []):

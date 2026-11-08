@@ -89,10 +89,13 @@ def run(out: Path, clean_seeds: int = 20, seed: int = 1) -> dict:
                 by_det[f["detector"]].append(f["kind"])
             rows.append({"instance": i, "new_flags": [(f["detector"], f["kind"]) for f in new],
                          "expected_hit": any(f["kind"] in expected for f in new),
+                         "expected_defect": any(f["kind"] in expected and f.get("severity") == "defect"
+                                                for f in new),
                          "detectors": {k: sorted(set(v)) for k, v in by_det.items()}})
         profile[cname] = {
             "expected": sorted(expected),
             "detected_expected": sum(r["expected_hit"] for r in rows),
+            "detected_as_defect": sum(r["expected_defect"] for r in rows),
             "detected_any": sum(bool(r["new_flags"]) for r in rows),
             "by_detector": {det: sum(det in r["detectors"] for r in rows) for det in detectors},
             "instances": rows,
@@ -100,24 +103,26 @@ def run(out: Path, clean_seeds: int = 20, seed: int = 1) -> dict:
 
     fa = Counter()
     fa_runs = 0
+    fa_defect_runs = 0
     for s in range(clean_seeds):
         d = out / f"clean_{s:02d}"
         shutil.rmtree(d, ignore_errors=True)
         res = audit_run(d, run_pipeline(d, seed=1000 + s))
         fa_runs += bool(res["flags"])
+        fa_defect_runs += any(f.get("severity") == "defect" for f in res["flags"])
         for f in res["flags"]:
             fa[f"{f['detector']}:{f['kind']}"] += 1
     result = {"control_flags": control["flags"], "profile": profile,
-              "false_alarms": {"clean_runs": clean_seeds, "runs_with_any_flag": fa_runs, "by_kind": dict(fa)}}
+              "false_alarms": {"clean_runs": clean_seeds, "runs_with_any_flag": fa_runs, "runs_with_defect_flag": fa_defect_runs, "by_kind": dict(fa)}}
     (out / "calibration.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
 
 def table(result: dict) -> str:
     dets = ["attest", "outputs", "static", "verify", "invariants", "provenance"]
-    lines = [f"{'defect class':44} {'expected':>8} " + " ".join(f"{d[:8]:>8}" for d in dets)]
+    lines = [f"{'defect class':44} {'expected':>8} {'defect':>8} " + " ".join(f"{d[:8]:>8}" for d in dets)]
     for c, p in result["profile"].items():
-        lines.append(f"{c[:44]:44} {p['detected_expected']:>6}/3 "
+        lines.append(f"{c[:44]:44} {p['detected_expected']:>6}/3 {p.get('detected_as_defect', 0):>6}/3 "
                      + " ".join(f"{p['by_detector'].get(d, 0):>6}/3" for d in dets))
     fa = result["false_alarms"]
     lines.append(f"\nclean runs with any flag: {fa['runs_with_any_flag']}/{fa['clean_runs']}  {fa['by_kind'] or ''}")
