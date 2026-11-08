@@ -37,7 +37,7 @@ from typing import Any, Iterable
 
 from hepprov.plugins import hep
 
-NUM = re.compile(r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,12})?|\d+\.\d{1,12}|\d{2,})(?:[eE][-+]?\d{1,3})?(?!\w|\.\d)")
+NUM = re.compile(r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,12})?|\d+\.\d{1,12}|\d{2,})(?:[eE][-+]?\d{1,3})?(?!\w|\.\d)")
 _PAREN_EXP = re.compile(r"^[^()\n]*?\)\s*(?:[eE]|[×x]\s*10\^?\{?)([-+−]?\d{1,3})\}?")
 CONST = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.]|\.\d)")
 PRIMITIVE = ("log", "data", "emit")
@@ -681,6 +681,8 @@ def _prose_candidates(pairs, values):
             yield f"wmean_err({la},{lb})", 1 / math.sqrt(wa + wb)
             d, sd = a - b, math.sqrt(sa ** 2 + sb ** 2)
             yield f"diff_err({la},{lb})", sd
+            yield f"diff({la},{lb})", d
+            yield f"diff({lb},{la})", -d
             for sign, dd in ((1, d), (-1, -d)):
                 yield f"pull{'+' if sign > 0 else '-'}({la},{lb})", dd / sd
     for lab, x in values:
@@ -725,11 +727,57 @@ def derive_prose(verdicts: list[ClaimVerdict], text: str, pool: Pool | None = No
             v.verdict, v.formula, v.support, v.null_rate = "derived_from_text", hits[0], hits, null
 
 
+def derive_table_rows(verdicts: list[ClaimVerdict], text: str, pool: Pool | None = None) -> None:
+    """Explain unexplained table cells by arithmetic on the other cells of the SAME row.
+
+    A difference or ratio column next to its inputs ("| 4 | 1.449 | 1.743 | +0.294 |")
+    is the most common table derivation. The row is a far smaller candidate set
+    than the report neighbourhood, so its decoy null stays low even at 3
+    significant figures. Verdict ``derived_from_text``, accepted only if the
+    measured chance rate is at most PROSE_MAX_NULL.
+    """
+    for v in verdicts:
+        if v.verdict != "unexplained" or v.claim.pos < 0 or v.claim.sig < 2:
+            continue
+        lo = text.rfind("\n", 0, v.claim.pos) + 1
+        hi = text.find("\n", v.claim.pos)
+        hi = len(text) if hi < 0 else hi
+        if not text[lo:hi].lstrip().startswith("|"):
+            continue
+        cells = [(u.claim.text, _full(u, pool)) for u in verdicts
+                 if u is not v and lo <= u.claim.pos < hi and not _fmt_eq(u.claim.value, v.claim)]
+        cands = []
+        for i, (la, a) in enumerate(cells):
+            for j, (lb, b) in enumerate(cells):
+                if i == j:
+                    continue
+                cands += [(f"{la}-{lb}", a - b), (f"{la}+{lb}", a + b), (f"{la}*{lb}", a * b)]
+                if b:
+                    cands += [(f"{la}/{lb}", a / b), (f"100*({la}-{lb})/{lb}", 100 * (a - b) / b),
+                              (f"100*{la}/{lb}", 100 * a / b)]
+        cands = [(d, x) for d, x in cands if math.isfinite(x)]
+        hits = [d for d, x in cands if _fmt_eq(x, v.claim) or _fmt_eq(-x, v.claim) and v.claim.text.startswith("-")]
+        if not hits or len(set(hits)) > MULT_CAP:
+            continue
+        printed = set()
+        for _, x in cands:
+            try:
+                printed.add(f"{abs(x):.{v.claim.decimals}f}")
+            except (ValueError, OverflowError):
+                pass
+        rng = random.Random(f"row|{v.claim.text}")
+        null = sum(f"{abs(v.claim.value) * rng.uniform(0.5, 1.5):.{v.claim.decimals}f}" in printed
+                   for _ in range(N_DECOYS)) / N_DECOYS
+        if null <= PROSE_MAX_NULL:
+            v.verdict, v.formula, v.support, v.null_rate = "derived_from_text", hits[0], hits, null
+
+
 def verify_report(report_text: str, pool: Pool, grammar: bool = True,
                   intermediates: bool = True) -> dict[str, Any]:
     rv = [classify(c, pool, grammar) for c in extract_claims(report_text)]
     derive_in_text(rv, pool)   # small constants are NOT operands: tried, they made fabrications ambiguous
     derive_prose(rv, report_text, pool)
+    derive_table_rows(rv, report_text, pool)
     res = _summ(rv)
     res["pool_size"] = len(pool.values)
     res["grammar_truncated"] = bool(getattr(pool, "grammar_truncated", False))
