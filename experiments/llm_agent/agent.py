@@ -178,12 +178,22 @@ def run_task(task_fn, out: Path, seed: int, client: anthropic.Anthropic) -> dict
                 extra["betas"] = BETAS
             if FALLBACKS:
                 extra["fallbacks"] = FALLBACKS
-            with client.beta.messages.stream(
-                model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=messages,
-                thinking=THINKING, output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
-                **extra,
-            ) as stream:
-                resp = stream.get_final_message()
+            for attempt in range(4):   # dropped connections mid-stream are transient: retry the turn
+                try:
+                    with client.beta.messages.stream(
+                        model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=messages,
+                        thinking=THINKING, output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
+                        **extra,
+                    ) as stream:
+                        resp = stream.get_final_message()
+                    break
+                except anthropic.APIStatusError:
+                    raise
+                except Exception as e:  # connection reset, incomplete chunked read, ...
+                    log.write(json.dumps({"turn": turns, "retry": attempt + 1, "error": repr(e)[:300]}) + "\n")
+                    if attempt == 3:
+                        raise
+                    time.sleep(10 * (attempt + 1))
         except anthropic.APIStatusError as e:
             log.write(json.dumps({"turn": turns, "error": f"{e.status_code}: {e.message}"}) + "\n")
             outcome = f"api_error_{e.status_code}"
@@ -271,7 +281,11 @@ def main() -> int:
     sel = [t for t in pool if not a.tasks or any(t.__name__.upper().startswith(p.upper()) for p in a.tasks)]
     total = 0.0
     for t in sel:
-        m = run_task(t, out, a.seed, client)
+        try:
+            m = run_task(t, out, a.seed, client)
+        except Exception as e:  # one task's failure must not lose the rest of the seed
+            print(f"{t.__name__}: harness error {e!r}"[:300], flush=True)
+            continue
         total += m["cost_usd_estimate"]
         print(f"{m['task']:24} {m['outcome']:24} turns={m['turns']:<3} ~${m['cost_usd_estimate']:.2f}", flush=True)
     print(f"total ~${total:.2f}")

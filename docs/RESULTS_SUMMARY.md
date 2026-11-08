@@ -55,18 +55,18 @@ These checks were designed with those findings in view, so this is a rediscovery
 
 ## 4. Live LLM agents under the recorder — [LIVE_AGENT_PILOT.md](LIVE_AGENT_PILOT.md)
 
-45 runs on Claude Opus 5.5 and Claude Haiku 5.5, about $4.10 in total.
+69 runs on Claude Opus 5.5 and Claude Haiku 5.5, about $5.90 in total.
 
 | Experiment | Runs | Agents | HEP-Prov |
 |---|---|---|---|
 | Data-visible traps (missing file, units, duplicates, saturation, wrong calibration, stale directory, corrupt rows, missing efficiency bin) | 30 | **30/30 handled correctly** | verification of the reported numbers; 0–3 false-alarm defect flags per report |
 | Long open-ended tasks (design scan, multi-run combination) | 4 | 4/4 correct | 1–3 false-alarm flags (prose arithmetic) |
 | Scaled mid-run change of an input file | 6 | noticed 5/6 | **6/6 detected** |
-| Physically consistent mid-run substitution (fresh sample, same truth) | 6 | noticed 4/6 (Opus 3/3, Haiku 1/3) | **6/6 detected, including both Haiku misses** |
+| Physically consistent mid-run substitution (fresh sample, same truth), seeds 4–9 | 30 | noticed 16/30 = 53% [36, 70] (Opus 11/12, Haiku 5/18) | **30/30 detected = 100% [89, 100]**, including all 14 misses |
 
 What this establishes:
 1. Current models catch data-visible problems themselves. HEP-Prov's role there is independent verification: it confirms that reported numbers trace to the data.
-2. Failures outside the agent's view are caught every time (12/12). Two consistent substitutions went unnoticed by the agent and showed nothing in the data. These are the first live cases where only provenance caught a failure.
+2. Failures outside the agent's view are caught every time (36/36). In 14 of 30 consistent substitutions the agent did not notice, and nothing showed in the data; only provenance recorded them. Agents notice only when they happen to fingerprint the raw file (first rows, min/max, checksum) and compare across reads. Opus does this habitually, Haiku rarely.
 3. Natural (unplanted) agent mistakes did not occur in 45 runs, even on "long" tasks. The agents finished those in 5–8 turns. A detection result for natural mistakes needs much larger, incremental tasks.
 
 ## 5. What was learned about building such a verifier
@@ -77,6 +77,7 @@ Each item was found on real data, fixed, and rechecked against the calibration:
 - **Report parsing needs real-report robustness:** signs, values with 9 or more decimals, exponents (including "(x ± y)e-3"), unit prefixes, metadata (seeds, sizes, versions, date stamps), word-level matching ("GiB" inside "eligible").
 - **Chance rates everywhere.** Identity matching in large pools, formula matching, and report-local derivation all need a measured null. Below 4 significant figures, numbers can neither be verified nor refuted against large pools ("ambiguous").
 - **Operand discipline.** Extra operands (small constants, all primitive values, unit-loss scales) create coincidences that hid fabricated numbers. Those changes were reverted. Only sample sizes are added as primitive operands.
+- **Stale claims after revision.** A report number whose only support is a step superseded later (script re-run at a new version, or an input replaced and the step not re-run) is flagged. Three checks keep it honest: regeneration on the current files (unchanged numbers are dropped), disclosure in the paragraph ("in my first inspection..."), and presentational revisions (the new script reproduces what it still prints). On 71 live runs: 0 defect-level stale flags; 74 informational ones, all agents' disclosures of earlier values, each confirmed by regeneration.
 - **What remains.** Residual false alarms come from prose arithmetic beyond the grammar (binomial-model predictions, products with small constants, ranges) and from values computed but never printed.
 
 ## Open

@@ -235,3 +235,19 @@ Two-significant-figure matches that rest only on a unit or percent conversion ar
   - a two-digit uncertainty matched through ÷100.
 
 Measuring sensitivity needs runs where agents actually leave stale numbers in a revised report. That is the job of the revision suite.
+
+## Revision suite (first 10 runs, about $2.10)
+
+`agent.py --suite revision` (`experiments/llm_agent/tasks_revision.py`). The agent finishes an analysis, then gets a scripted change request:
+- **R1:** quality cut 0.6 → 0.8 and energy window 40–60 → 44–56 GeV, on the L2 multi-run data.
+- **R2:** layer budget 50 → 30 and constant term 0.007 → 0.012, on the L1 design scan. Truth after: t = 6 mm.
+- **R3:** the optimized 5 MeV file is regenerated with the final geometry, through a recorded write. Truth after: +26% at 5 MeV, +22% at 1 MeV.
+
+Truth is fixed both before and after the change. Completed: Haiku seeds 1 and 3 (R1–R3), Opus seed 1 (R1) and seed 2 (R1–R3). Two runs crashed on dropped connections mid-stream; the harness now retries transient connection errors and isolates per-task failures. Further runs were stopped when the machine ran low on memory.
+
+**Agents, adjudicated against both truths:**
+- Every revised report carries the after-change answer. R1: all 6 per-run efficiencies match the after truth to 0.0015. R2: t = 6 mm. R3: +26.0% and +21.9%.
+- **No undisclosed leftover number.** Every pre-revision value still in a report is labelled as such: "was 0.007", "Rev 1 best feasible: t = 4 mm", "Compared with the old selection (ε = 0.888 ...)", or a "Changes from revision 1" table. Opus archives the old outputs explicitly (`results_v1_q0.6_E40-60/`, `cuts_v1_...json`).
+- Haiku s3 found a flaw in R2's design: 160 mm / 6 mm = 26.67 layers is not an integer. It correctly left the choice to the requester.
+
+So current models revise cleanly at this task size, and natural stale-claim mistakes did not occur. The stale-claim detector's sensitivity is shown by fault-injection tests and the D10 calibration class, and its specificity by 0 defect-level flags on 71 live runs. The HEP-Prov audit of the revision runs is pending.
