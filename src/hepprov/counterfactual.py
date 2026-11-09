@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,7 +110,13 @@ def _run(script_rel: str, cwd: Path, timeout: int) -> tuple[int, str, str]:
     env["PYTHONPATH"] = SITE_DIR
     env["HEPPROV_ROOT"] = str(cwd)
     env["HEPPROV_LOG_DIR"] = str(logs)
-    p = subprocess.run([sys.executable, script_rel], cwd=cwd, capture_output=True, timeout=timeout, env=env)
+    for attempt in range(3):
+        p = subprocess.run([sys.executable, script_rel], cwd=cwd, capture_output=True, timeout=timeout, env=env)
+        # 0xC0000142 (STATUS_DLL_INIT_FAILED): the OS could not start the process, typically under
+        # memory pressure. That is the machine, not the script: wait and retry.
+        if p.returncode not in (3221225794, -1073741502):
+            break
+        time.sleep(15 * (attempt + 1))
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 

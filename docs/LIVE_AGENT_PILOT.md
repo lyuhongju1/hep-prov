@@ -251,3 +251,21 @@ Truth is fixed both before and after the change. Completed: Haiku seeds 1 and 3 
 - Haiku s3 found a flaw in R2's design: 160 mm / 6 mm = 26.67 layers is not an integer. It correctly left the choice to the requester.
 
 So current models revise cleanly at this task size, and natural stale-claim mistakes did not occur. The stale-claim detector's sensitivity is shown by fault-injection tests and the D10 calibration class, and its specificity by 0 defect-level flags on 71 live runs. The HEP-Prov audit of the revision runs is pending.
+
+## Final audit of the whole live corpus (84 runs, code at `8e7b85d` + re-execution retry)
+
+Every live run was re-audited with the final code and `counterfactual=True` (`HEP-Prov-external/audit_all.py`, merged results in `audit_all_final.jsonl`). Two revision runs are excluded as environment failures: every Python process died with 0xC0000142 under memory pressure, and both agents reported that nothing could be computed. That leaves 82 runs.
+
+| Group | Runs | Defect flags per run | Runs with 0 defect flags | Main defect kinds |
+|---|---|---|---|---|
+| Data-visible traps | 31 | 1.0 | 13 | unexplained prose numbers 13, abandoned scripts 12, tainted claims 4 |
+| Long tasks | 4 | 1.8 | 1 | unexplained prose numbers 6 |
+| Revision tasks | 11 | 1.8 | 2 | unexplained prose numbers 11, tainted claims 6 |
+| Scaled mid-run change | 6 | 20.3 | 0 | claims depending on the changed file 98, `written_outside_recorder` 20 |
+| Consistent substitution | 30 | 17.8 | 0 | claims depending on the changed file 426, `written_outside_recorder` 85 |
+
+How to read it:
+- **Untampered runs** (traps, long, revision; 46 runs): 1.0–1.8 defect flags per report. These are the false-alarm cost on careful agents. They are dominated by numbers computed in prose beyond the verifier's grammar, and by scripts the agent tried and abandoned. Abandoned scripts are recorded as `failed_step`; they produce no evidence, but they are process facts, not errors in the report.
+- **Tampered runs** (36): every run is flagged, mostly through report numbers that depend on the changed file. Those are true dependencies; where the re-execution was inconclusive, it was because the agents' own check scripts print hashes or timestamps.
+
+**Re-execution under memory pressure.** The first pass of this audit ran while the machine was short of memory. Some re-executions could not start (0xC0000142), so their steps kept full step-level taint. Four runs went from 0–4 tainted claims to 10–34. Re-executions now retry that failure, and the audit records each step's counterfactual status, so an environmental failure is visible rather than silently inflating flags. The 23 runs whose tainted claims lacked a counterfactual result were re-audited. Only those 4 changed; the other 19 were genuine.
