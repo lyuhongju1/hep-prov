@@ -55,7 +55,7 @@ These checks were designed with those findings in view, so this is a rediscovery
 
 ## 4. Live LLM agents under the recorder — [LIVE_AGENT_PILOT.md](LIVE_AGENT_PILOT.md)
 
-95 runs on Claude Opus 5.5 and Claude Haiku 5.5 (plus 2 environment failures), about $10.70 in total.
+95 runs on Claude Opus 5.5 and Claude Haiku 5.5 (plus 2 environment failures), about $9.90 in total.
 
 | Experiment | Runs | Agents | HEP-Prov |
 |---|---|---|---|

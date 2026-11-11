@@ -236,7 +236,7 @@ Two-significant-figure matches that rest only on a unit or percent conversion ar
 
 Measuring sensitivity needs runs where agents actually leave stale numbers in a revised report. That is the job of the revision suite.
 
-## Revision suite (24 runs, about $4.80)
+## Revision suite (24 runs, about $4.00)
 
 `agent.py --suite revision` (`experiments/llm_agent/tasks_revision.py`). The agent finishes an analysis, then gets a scripted change request:
 - **R1:** quality cut 0.6 → 0.8 and energy window 40–60 → 44–56 GeV, on the L2 multi-run data.
