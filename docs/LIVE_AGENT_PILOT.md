@@ -236,23 +236,35 @@ Two-significant-figure matches that rest only on a unit or percent conversion ar
 
 Measuring sensitivity needs runs where agents actually leave stale numbers in a revised report. That is the job of the revision suite.
 
-## Revision suite (first 10 runs, about $2.10)
+## Revision suite (24 runs, about $4.80)
 
 `agent.py --suite revision` (`experiments/llm_agent/tasks_revision.py`). The agent finishes an analysis, then gets a scripted change request:
 - **R1:** quality cut 0.6 → 0.8 and energy window 40–60 → 44–56 GeV, on the L2 multi-run data.
 - **R2:** layer budget 50 → 30 and constant term 0.007 → 0.012, on the L1 design scan. Truth after: t = 6 mm.
 - **R3:** the optimized 5 MeV file is regenerated with the final geometry, through a recorded write. Truth after: +26% at 5 MeV, +22% at 1 MeV.
 
-Truth is fixed both before and after the change. Completed: Haiku seeds 1 and 3 (R1–R3), Opus seed 1 (R1) and seed 2 (R1–R3). Two runs crashed on dropped connections mid-stream; the harness now retries transient connection errors and isolates per-task failures. Further runs were stopped when the machine ran low on memory.
+Truth is fixed both before and after the change. Haiku seeds 1–5 and Opus seeds 1–3, all three tasks each. Two runs crashed on dropped connections mid-stream; the harness now retries transient connection errors and isolates per-task failures. Further runs were stopped when the machine ran low on memory.
 
 **Agents, adjudicated against both truths:**
 - Every revised report carries the after-change answer. R1: all 6 per-run efficiencies match the after truth to 0.0015. R2: t = 6 mm. R3: +26.0% and +21.9%.
 - **No undisclosed leftover number.** Every pre-revision value still in a report is labelled as such: "was 0.007", "Rev 1 best feasible: t = 4 mm", "Compared with the old selection (ε = 0.888 ...)", or a "Changes from revision 1" table. Opus archives the old outputs explicitly (`results_v1_q0.6_E40-60/`, `cuts_v1_...json`).
 - Haiku s3 found a flaw in R2's design: 160 mm / 6 mm = 26.67 layers is not an integer. It correctly left the choice to the requester.
 
-So current models revise cleanly at this task size, and natural stale-claim mistakes did not occur. The stale-claim detector's sensitivity is shown by fault-injection tests and the D10 calibration class, and its specificity by 0 defect-level flags on 71 live runs. The HEP-Prov audit of the revision runs is pending.
+So current models revise cleanly at this task size, and natural stale-claim mistakes did not occur. **Result: 24/24 correct revisions, 0 undisclosed leftover numbers.** In R2, 5 runs recommend t = 6 mm and 3 recommend t = 8 mm; the latter all do so because 160/6 is not an integer, which is a flaw in the task. Several agents spotted a second consequence of the R3 design: only the 5 MeV optimized file was regenerated, so the comparison now mixes two geometries. They recommended regenerating the 1 MeV file as well.
 
-## Final audit of the whole live corpus (84 runs, code at `8e7b85d` + re-execution retry)
+The stale-claim detector's sensitivity is therefore shown by fault-injection tests and the D10 calibration class. Its specificity is 0 defect-level flags across all 95 live runs, including these 24 revisions with their many labelled earlier values.
+
+**Auditing the revision runs found eight gaps in the verifier, not in the agents.** The first audit of these runs raised about 200 defect flags. Each cause was fixed, given a test, and re-checked against the calibration (30/30 at defect severity, 0/20):
+- markdown tables were not parsed, so numbers still in the current `summary_table.md` looked stale (current-state support);
+- an in-place edit read back within one step looked like a foreign file (`ok_intermediate`);
+- "rev 1" labels and "previous" table headings were not recognised as disclosures;
+- matches of one- or two-digit numbers, and matches only through a unit conversion, are chance-level;
+- the T3 decoy file, opened and named in the report, was still a defect;
+- difference columns in tables and differences of stated ± pairs were not derived (now row-local and pair-local, with decoy nulls);
+- "{2,5,10,20,50,100}" was read as the number 50100;
+- a placeholder signature with a 15% chance rate counted as a defect.
+
+## Final audit of the whole live corpus (95 runs, code at `1e9dbd0`)
 
 Every live run was re-audited with the final code and `counterfactual=True` (`HEP-Prov-external/audit_all.py`, merged results in `audit_all_final.jsonl`). Two revision runs are excluded as environment failures: every Python process died with 0xC0000142 under memory pressure, and both agents reported that nothing could be computed. That leaves 82 runs.
 
@@ -260,12 +272,14 @@ Every live run was re-audited with the final code and `counterfactual=True` (`HE
 |---|---|---|---|---|
 | Data-visible traps | 31 | 1.0 | 13 | unexplained prose numbers 13, abandoned scripts 12, tainted claims 4 |
 | Long tasks | 4 | 1.8 | 1 | unexplained prose numbers 6 |
-| Revision tasks | 11 | 1.8 | 2 | unexplained prose numbers 11, tainted claims 6 |
+| Revision tasks | 24 | 2.4 | 3 | unexplained prose numbers 28, tainted claims 19 (T3 decoy file read during inspection), abandoned scripts 6, literals hard-coded in a check script 4 |
 | Scaled mid-run change | 6 | 20.3 | 0 | claims depending on the changed file 98, `written_outside_recorder` 20 |
 | Consistent substitution | 30 | 17.8 | 0 | claims depending on the changed file 426, `written_outside_recorder` 85 |
 
+No `stale_claim` is a defect anywhere in the corpus. Every revised report that still quotes a pre-revision number labels it, and the detector downgrades all of them to `info`.
+
 How to read it:
-- **Untampered runs** (traps, long, revision; 46 runs): 1.0–1.8 defect flags per report. These are the false-alarm cost on careful agents. They are dominated by numbers computed in prose beyond the verifier's grammar, and by scripts the agent tried and abandoned. Abandoned scripts are recorded as `failed_step`; they produce no evidence, but they are process facts, not errors in the report.
+- **Untampered runs** (traps, long, revision; 59 runs): 1.0–2.4 defect flags per report. These are the false-alarm cost on careful agents. They are dominated by numbers computed in prose beyond the verifier's grammar, and by scripts the agent tried and abandoned. Abandoned scripts are recorded as `failed_step`; they produce no evidence, but they are process facts, not errors in the report.
 - **Tampered runs** (36): every run is flagged, mostly through report numbers that depend on the changed file. Those are true dependencies; where the re-execution was inconclusive, it was because the agents' own check scripts print hashes or timestamps.
 
 **Re-execution under memory pressure.** The first pass of this audit ran while the machine was short of memory. Some re-executions could not start (0xC0000142), so their steps kept full step-level taint. Four runs went from 0–4 tainted claims to 10–34. Re-executions now retry that failure, and the audit records each step's counterfactual status, so an environmental failure is visible rather than silently inflating flags. The 23 runs whose tainted claims lacked a counterfactual result were re-audited. Only those 4 changed; the other 19 were genuine.

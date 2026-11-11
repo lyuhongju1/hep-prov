@@ -55,19 +55,21 @@ These checks were designed with those findings in view, so this is a rediscovery
 
 ## 4. Live LLM agents under the recorder — [LIVE_AGENT_PILOT.md](LIVE_AGENT_PILOT.md)
 
-69 runs on Claude Opus 5.5 and Claude Haiku 5.5, about $5.90 in total.
+95 runs on Claude Opus 5.5 and Claude Haiku 5.5 (plus 2 environment failures), about $10.70 in total.
 
 | Experiment | Runs | Agents | HEP-Prov |
 |---|---|---|---|
 | Data-visible traps (missing file, units, duplicates, saturation, wrong calibration, stale directory, corrupt rows, missing efficiency bin) | 30 | **30/30 handled correctly** | verification of the reported numbers; 0–3 false-alarm defect flags per report |
-| Long open-ended tasks (design scan, multi-run combination) | 4 | 4/4 correct | 1–3 false-alarm flags (prose arithmetic) |
+| Long open-ended tasks (design scan, multi-run combination) | 4 | 4/4 correct | 1.8 defect flags per run (prose arithmetic) |
+| Revision tasks (cut change, new budget and constant, regenerated data) | 24 | **24/24 correct revisions, 0 undisclosed leftover numbers** | 2.4 defect flags per run; 0 defect-level stale claims |
 | Scaled mid-run change of an input file | 6 | noticed 5/6 | **6/6 detected** |
 | Physically consistent mid-run substitution (fresh sample, same truth), seeds 4–9 | 30 | noticed 16/30 = 53% [36, 70] (Opus 11/12, Haiku 5/18) | **30/30 detected = 100% [89, 100]**, including all 14 misses |
 
 What this establishes:
 1. Current models catch data-visible problems themselves. HEP-Prov's role there is independent verification: it confirms that reported numbers trace to the data.
 2. Failures outside the agent's view are caught every time (36/36). In 14 of 30 consistent substitutions the agent did not notice, and nothing showed in the data; only provenance recorded them. Agents notice only when they happen to fingerprint the raw file (first rows, min/max, checksum) and compare across reads. Opus does this habitually, Haiku rarely.
-3. Natural (unplanted) agent mistakes did not occur in 45 runs, even on "long" tasks. The agents finished those in 5–8 turns. A detection result for natural mistakes needs much larger, incremental tasks.
+3. Natural (unplanted) agent mistakes did not occur in 95 runs, including 24 revisions built to elicit leftover numbers. Agents label or archive earlier values themselves. A detection result for natural mistakes needs much larger, incremental tasks.
+4. The false-alarm cost on untampered runs is 1.0–2.4 defect flags per report (59 runs), mostly prose arithmetic beyond the grammar and abandoned scripts.
 
 ## 5. What was learned about building such a verifier
 
