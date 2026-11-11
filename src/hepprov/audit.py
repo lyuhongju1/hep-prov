@@ -85,6 +85,8 @@ def _assign_severity(flags: list[dict[str, Any]], m: Manifest) -> None:
             sev = "info"     # the agent opened a leftover file and the report names it (inspected and set aside)
         elif f["kind"] == "stale_claim" and f.get("low_precision"):
             sev = "info"     # 1-2 significant figures: an exact match to an old printout is chance-level
+        elif f["kind"] == "placeholder_signature" and (f.get("null_rate") or 0) > WEAK_NULL:
+            sev = "info"     # the padded-mean formula matches, but so would a random number this often
         elif f["kind"] == "claim_from_tainted_input" and f.get("disclosed"):
             sev = "info"     # the report says which flagged input the number comes from
         f.setdefault("severity", sev)
@@ -117,6 +119,16 @@ def _paragraph(text: str, pos: int) -> str:
     start = text.rfind("\n\n", 0, pos)
     end = text.find("\n\n", pos)
     return text[start + 1 if start >= 0 else 0:end if end >= 0 else len(text)]
+
+
+def _table_heading(text: str, pos: int) -> str:
+    """For a position inside a markdown table: the text block just before the table (its heading)."""
+    start = text.rfind("\n\n", 0, pos)
+    block_start = start + 2 if start >= 0 else 0
+    if not text[block_start:pos].lstrip().startswith("|"):
+        return ""
+    prev = text.rfind("\n\n", 0, max(0, start))
+    return text[prev + 2 if prev >= 0 else 0:max(0, start)]
 
 
 def _regen_status(key: str, stale: dict[str, str], regen_of: dict) -> str:
@@ -414,14 +426,17 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             if v["verdict"] in ("verified", "copy") and v["support"] and stale:
                 reasons = [_stale_of(k, stale, producer) for k in v["support"]]
                 regen = [_regen_status(k, stale, regen_of) for k in v["support"]]
-                weak_conv = v["sig"] < 3 and all(re.match(r"(?:x|/)(?:100|1000):", k) for k in v["support"])
+                # a unit/percent conversion multiplies the ways to match by chance ("156 mm" vs 0.156 x 1000)
+                weak_conv = v["sig"] < 4 and all(re.match(r"(?:x|/)(?:100|1000):", k) for k in v["support"])
                 in_current = _in_text(v["text"], current_text)
                 if all(reasons) and "unchanged" not in regen and not weak_conv and not in_current:
                     pos = v.get("pos", 0)
                     before = report_text[max(0, pos - 140):pos].lower().replace("-", " ")
                     para = _paragraph(report_text, pos).lower().replace("-", " ")
+                    heading = _table_heading(report_text, pos).lower().replace("-", " ")
                     marked = (any(w in before for w in _EARLIER_WORDS)
-                              or any(w in para for w in _DISCLOSURE_PHRASES))
+                              or any(w in para for w in _DISCLOSURE_PHRASES)
+                              or any(w in heading for w in _EARLIER_WORDS + _DISCLOSURE_PHRASES))
                     note = {"changed": "; regenerating the step on the current files changes this number",
                             "inconclusive": "; regeneration inconclusive"}.get(regen[0], "")
                     pres = all(_label_of(k, producer) in presentational for k in v["support"])
@@ -438,7 +453,8 @@ def audit_run(root: str | Path, report: str | Path | None = None, min_claim_sig:
             for v in scope.get("verdicts", []):
                 if v["verdict"] == "diagnosed" and all("+[1.0]" in f for f in v["support"]):
                     flags.append(_flag("verify", "placeholder_signature",
-                                       f"{v['text']} = {v['formula']} (null {v['null_rate']:.0%})", claim=v["id"]))
+                                       f"{v['text']} = {v['formula']} (null {v['null_rate']:.0%})", claim=v["id"],
+                                       null_rate=v["null_rate"]))
     _assign_severity(flags, m)
     defects = [f for f in flags if f.get("severity") == "defect"]
     return {"root": str(root), "flags": flags, "n_flags": len(flags), "n_defect_flags": len(defects),

@@ -123,3 +123,11 @@ def test_declared_data_update_is_info_but_script_overwrite_is_defect(tmp_path):
     rec2.write_file("data.csv", "x\n" + "0.95\n" * 100, label="data update")
     ow2 = [f for f in audit_run(root2)["flags"] if f["kind"] == "overwrite"]
     assert all(f["severity"] == "info" for f in ow2)
+
+
+def test_comparison_table_under_a_previous_heading_is_marked(tmp_path):
+    root, rec = _setup(tmp_path)
+    rec.write_file("report.md", "Rate 10.8571.\n\n### Comparison with the previous selection\n\n"
+                                "| quantity | value |\n|---|---|\n| rate | 22.2857 |\n")
+    stale = [f for f in audit_run(root, root / "report.md")["flags"] if f["kind"] == "stale_claim"]
+    assert stale and all(f["severity"] == "info" for f in stale)
