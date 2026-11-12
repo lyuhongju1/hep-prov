@@ -264,7 +264,7 @@ The stale-claim detector's sensitivity is therefore shown by fault-injection tes
 - "{2,5,10,20,50,100}" was read as the number 50100;
 - a placeholder signature with a 15% chance rate counted as a defect.
 
-## Final audit of the whole live corpus (95 runs, code at `1e9dbd0`)
+## Final audit of the whole live corpus (95 runs, code at `959a4bb`)
 
 Every live run was re-audited with the final code and `counterfactual=True` (`HEP-Prov-external/audit_all.py`, merged results in `audit_all_final.jsonl`). Two revision runs are excluded as environment failures: every Python process died with 0xC0000142 under memory pressure, and both agents reported that nothing could be computed. That leaves 82 runs.
 
