@@ -6,3 +6,6 @@ __pycache__/
 # local assistant notes
 CLAUDE.md
 .claude/
+
+# manuscripts live outside the repo
+paper/
