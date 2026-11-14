@@ -49,9 +49,9 @@ These checks were designed with those findings in view, so this is a rediscovery
 ## 3. External corpus: an independent HEP agent study — [EXTERNAL_HZZ.md](EXTERNAL_HZZ.md)
 
 59 reports and 207 results files from the HZZ / CEPC agent study (arXiv:2611.03373), checked in archive mode.
-- At 5 or more significant figures, **437/456 report numbers are supported**, against about 3 expected by chance.
+- At 5 or more significant figures, **449/468 report numbers are supported**, against about 1 expected by chance.
 - **No defect found.**
-- **A method finding.** In a pool of about 260,000 values, an exact match at 3 significant figures is chance-level (411 matched vs 398 expected). Identity support needs a null too.
+- **A method finding.** In this pool of 45,340 values, about 38% of 3-figure and 16% of 4-figure numbers would match some archived value by chance. Identity support needs a null too.
 
 ## 4. Live LLM agents under the recorder — [LIVE_AGENT_PILOT.md](LIVE_AGENT_PILOT.md)
 

@@ -6,22 +6,28 @@
 
 ## Result
 
-| Significant figures | Claims | Exact copy of an archived value | Derived from nearby supported numbers | Unexplained | Copies expected by chance |
+Regenerated on 2026-11-14 with the current code (`examples/hzz_audit.py`). An earlier version of this page reported an evidence pool of 260,934 values and correspondingly higher chance rates; the verifier has since changed how it reads large results files, and the pool is now 45,340 values.
+
+| Significant figures | Claims | Exact match to an archived value | Derived from nearby supported numbers | Unexplained | Exact matches expected by chance |
 |---|---|---|---|---|---|
-| 3 | 431 | 411 | 0 | 20 | 398 |
-| 4 | 318 | 283 | 4 | 31 | 146 |
-| ≥5 | 456 | 413 | 24 | 19 | 3.4 |
+| 3 | 427 | 422 | 0 | 5 | 162 (38%) |
+| 4 | 318 | 278 | 11 | 29 | 49 (16%) |
+| ≥5 | 468 | 424 | 25 | 19 | 1.1 (0.2%) |
 
-**The chance column is the main finding about method.** The evidence pool has 260,934 values. At 3 significant figures, an exact match is no evidence at all (411 matched against 398 expected by chance). At 4 it's weak. Only at 5 or more is identity support informative. A verifier that reports "91% of numbers supported" without this null misleads. HEP-Prov now reports the per-claim chance rate for identity matches as well as for formulas.
+**The chance column is the main finding about method.** At 3 significant figures, about 38% of numbers would match some archived value by chance, and at 4 about 16%. Only from 5 figures on is an exact match informative: the chance rate is 1.1% at 5 figures, 0.3% at 6 and 0.02% at 7, and 405 of the 468 numbers with ≥5 figures have 6 or more. A verifier that reports "91% of numbers supported" without this null misleads. The chance rate of exact matches is measured by this script. HEP-Prov's main check accepts exact matches at any precision, and the chance-rate rules apply to derived matches (see the limitations in the paper).
 
-**At ≥5 significant figures, 437 of 456 claims (96%) are supported.** 413 match an archived value exactly, with about 3 matches expected by chance. 24 are derived from neighbouring supported numbers, all with local chance rates ≤ 5%. Example: "+0.660850 (2.609061 → 3.269912)" is reproduced exactly only from the full-precision archived I3 values, not from the printed rounded ones.
+**At ≥5 significant figures, 449 of 468 claims (96%) are supported.** 424 match an archived value exactly, with about 1 match expected by chance. 25 are derived from neighbouring supported numbers, all with local chance rates ≤ 5%. Example: "+0.660850 (2.609061 → 3.269912)" is reproduced exactly only from the full-precision archived I3 values, not from the printed rounded ones.
 
-**The 19 unexplained high-precision numbers** fall into three groups:
-- Restatements of a derived value away from its inputs: "+0.660850" in summary documents (5×), "+0.693353".
-- Stage-by-stage I3 shifts comparing two detector-card variants (`legacy_hzz_delphes_candidate_v2_comparison.md`), whose inputs aren't in the archived results.
-- Sums over the unarchived ntuples (3741.87 and 6009.64 GeV, 2716.40575 GeV).
+**The 19 unexplained high-precision numbers:**
+- Restatements of a derived value away from its inputs: "+0.660850" (4×) and "+0.693353" (2×).
+- Stage-by-stage I3 shifts comparing two detector-card variants (`legacy_hzz_delphes_candidate_v2_comparison.md`, 7 numbers), whose inputs aren't in the archived results.
+- Sums over the unarchived ntuples (3741.87 and 6009.64 GeV).
+- The Z-boson mass, 91.1876 GeV (2×), an external constant.
+- A generated cross section (5.85273e-05 pb) and one table angle (0.053310847), whose sources aren't archived.
 
-None looks like a defect. They point to evidence that wasn't archived. This study is careful: it records input SHA256s, seeds and commits. On it, HEP-Prov finds **no defect**. That's a clean-agent result, the expected outcome for a careful analysis, and a measurement of false-alarm behavior on a real report.
+**The 34 unexplained 3–4-figure numbers** are mostly not results: the Pythia version 8.317 (14×), the isolation setting 9999 (10×), source line numbers and a test runtime. Four are physical values.
+
+None looks like a defect. They point to evidence that wasn't archived or to metadata. This study is careful: it records input SHA256s, seeds and commits. On it, HEP-Prov finds **no defect**. That's a clean-agent result, the expected outcome for a careful analysis, and a measurement of false-alarm behavior on a real report.
 
 ## What this changed in HEP-Prov
 
